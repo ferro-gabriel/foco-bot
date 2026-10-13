@@ -124,3 +124,26 @@ def hour_histogram(rows):
 def photos_per_order(rows):
     orders = Counter(r["order"] for r in rows if r.get("order"))
     return (len(rows) / len(orders)) if orders else 0.0, orders
+
+
+def fetch_order_times(client, when):
+    """{pedido: "dd/mm/aaaa hh:mm"} do relatório "Dados do pedido" (mês atual e anterior)."""
+    out = {}
+    months = [(when.month, when.year)]
+    prev = (when.month - 1 or 12, when.year - (1 if when.month == 1 else 0))
+    months.append(prev)
+    for month, year in months:
+        html = client.get("/report/orders", {"Report[month]": month, "Report[year]": year})
+        for tr in BeautifulSoup(html, "html.parser").select("table tbody tr"):
+            tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+            if len(tds) >= 2 and tds[0].isdigit():
+                out[tds[0]] = tds[1]
+    return out
+
+
+def fetch_order_total(client, order_id):
+    """Valor pago no pedido. A página tem dados do cliente: lemos só o total."""
+    html = client.get("/report/order-detail", {"id": order_id})
+    txt = BeautifulSoup(html, "html.parser").get_text("|", strip=True)
+    m = re.search(r"\|Total\|\s*R\$\s*([\d.,]+)", txt)
+    return _money(m.group(1)) if m else None

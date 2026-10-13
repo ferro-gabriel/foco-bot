@@ -248,7 +248,18 @@ def newest_rows(rows, n):
     return out
 
 
-def notify_orders(tg, s, fresh, d_rev):
+def when_text(stamp):
+    """'13/10/2026 09:00' → 'hoje às 09:00' / 'ontem às 22:15' / '11/10 às 08:00'"""
+    try:
+        dt = datetime.strptime(stamp[:16], "%d/%m/%Y %H:%M")
+    except (TypeError, ValueError):
+        return None
+    days = (now().date() - dt.date()).days
+    day = "hoje" if days == 0 else ("ontem" if days == 1 else dt.strftime("%d/%m"))
+    return f"{day} às {dt.strftime('%H:%M')}"
+
+
+def notify_orders(tg, s, fresh, d_rev, info=None):
     """Uma mensagem por pedido novo, com as fotos dele. Nada que já foi avisado é reenviado."""
     if not fresh:
         tg.send(f"💰 <b>Venda nova!</b> {e(s['name'])}\n+{brl(d_rev)}\n"
@@ -266,16 +277,20 @@ def notify_orders(tg, s, fresh, d_rev):
         mix = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items(), key=lambda x: -x[1]))
         hours = sorted({r["hour"][:5] for r in items if r.get("hour")})
         n = len(items)
+        meta = (info or {}).get(order, {})
         cap = [f"🛒 <b>Pedido {e(order)}</b> · {n} foto{'s' if n > 1 else ''}",
-               f"{e(s['name'])}",
-               f"📸 {mix}"]
+               f"{e(s['name'])}"]
+        sold_at = when_text(meta.get("time"))
+        if sold_at:
+            cap.append(f"⏰ Vendido {sold_at}")
+        cap.append(f"📸 {mix}" + (f" · cliente pagou {brl(meta['total'])}" if meta.get("total") else ""))
         if hours:
-            cap.append("🕐 Tiradas às " + ", ".join(hours[:10]))
+            cap.append("📷 Foto tirada às " + ", ".join(hours[:10]))
         if len(orders) == 1:
-            cap.append(f"💵 +{brl(d_rev)}")
+            cap.append(f"💵 Sua parte: +{brl(d_rev)}")
         if i == len(orders) - 1:
             if len(orders) > 1:
-                cap.append(f"💵 {len(orders)} pedidos, +{brl(d_rev)} no total")
+                cap.append(f"💵 {len(orders)} pedidos, sua parte: +{brl(d_rev)}")
             cap.append(total_line)
         imgs = [r["img"] for r in items]
         for j in range(0, len(imgs), 10):  # Telegram aceita até 10 fotos por álbum
@@ -329,7 +344,15 @@ def job_sales(client, tg, state):
             continue
         retry.pop(cid, None)
         codes[cid] = sorted({row_key(r) for r in rows} | set(codes.get(cid, [])))
-        notify_orders(tg, s, fresh, d_rev)
+        info = {}
+        if fresh:
+            try:
+                times = sales_mod.fetch_order_times(client, now())
+                for o in {r["order"] for r in fresh if r["order"]}:
+                    info[o] = {"time": times.get(o), "total": sales_mod.fetch_order_total(client, o)}
+            except Exception as ex:
+                print("detalhes do pedido indisponíveis:", type(ex).__name__)
+        notify_orders(tg, s, fresh, d_rev, info)
 
     state["sales"] = current
     # não deixa o estado crescer pra sempre

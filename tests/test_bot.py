@@ -130,6 +130,11 @@ class FakeClient:
             return "<table><tr><th>Receita Media</th><th>Media de Fotos</th></tr><tr><td>R$ 1.200,00</td><td>184,92</td></tr></table>"
         if path == "/accounting/get-image-type-by-competition":
             return "<table><tr><td>Premium 4500 Pixels</td><td>158</td><td>R$ 2.000,00</td></tr><tr><td>Alta 3450 Pixels</td><td>43</td><td>R$ 500,00</td></tr><tr><td>TOTAL</td><td>201</td><td>R$ 1,00</td></tr></table>"
+        if path == "/report/orders":
+            return ("<table><tbody><tr><td>11055461</td><td>13/10/2026 09:00</td><td>Ver</td></tr>"
+                    "<tr><td>11055904</td><td>12/10/2026 22:15</td><td>Ver</td></tr></tbody></table>")
+        if path == "/report/order-detail":
+            return "<div><span>Nome do Cliente</span><span>Fulano</span><span>Total</span><span>R$ 19,90</span></div>"
         raise AssertionError(path)
 
 
@@ -165,6 +170,9 @@ class FlowTests(unittest.TestCase):
         albums = [x for x in sent[n:] if x[0] == "fotos"]
         self.assertEqual(len(albums), 2)                       # um aviso por pedido
         self.assertIn("Pedido 11055461", albums[0][2])
+        self.assertIn("Vendido", albums[0][2])
+        self.assertIn("cliente pagou R$ 19,90", albums[0][2])
+        self.assertNotIn("Fulano", albums[0][2])
         self.assertEqual(albums[0][1], 1)                      # só a foto nova desse pedido
         self.assertIn("Pedido 11055904", albums[1][2])
         self.assertIn("2 pedidos", albums[1][2])
