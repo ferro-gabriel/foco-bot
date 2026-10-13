@@ -505,7 +505,7 @@ def job_auto(client, tg, state, commands=True):
         state["error_streak"] = n
         if n in (3, 12):  # avisa se persistir, sem spam
             tg.send("⚠️ O bot está com erro nas últimas execuções:\n<code>" + e("\n".join(errors))[:1500] + "</code>")
-        print("ERROS:", errors)
+        print("ERROS:", len(errors), "tarefa(s) com erro (detalhes vão pro Telegram)")
     else:
         state["error_streak"] = 0
 
@@ -519,11 +519,9 @@ def main():
         if cmd == "test":
             client.login()
             s = sales_mod.fetch_sales(client)
-            print(f"✅ Login OK. {len(s)} eventos com venda no ano, total {brl(sum(x['revenue'] for x in s.values()))}")
+            print(f"✅ Login OK. Relatório de vendas lido ({len(s)} eventos).")
             evs = ev_mod.parse_future(client.get("/competition/future"))
             print(f"✅ Página de eventos OK: {len(evs)} eventos na primeira página")
-            for x in evs[:3]:
-                print("  ", x["title"], "|", x["city"], x["uf"], "|", x["status"], "| fotógrafos:", x["photographers"])
             return
         {"auto": job_auto, "listen": job_listen, "events": lambda c, t, s: job_events(c, t, s, morning=True),
          "sales": job_sales, "report": job_report, "weekly": job_weekly}[cmd](client, tg, state)
