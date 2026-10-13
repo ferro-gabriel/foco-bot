@@ -6,7 +6,7 @@ HOME_LATLON = (-26.9194, -49.0661)
 MAX_KM = 300                      # distância máxima normal
 BIG_EVENT_PHOTOGRAPHERS = 8       # PR/RS só entram com pelo menos isso de fotógrafos/lista de espera
 HUGE_EVENT_PHOTOGRAPHERS = 20     # acima de MAX_KM só se for desse tamanho
-DAYS_AHEAD = 60                   # quantos dias pra frente olhar
+DAYS_AHEAD = 365                  # quantos dias pra frente olhar (listas de espera abrem cedo)
 
 GOOD_SCORE = 6.0                  # a partir dessa nota o evento vira "recomendado"
 DEADLINE_ALERT_HOURS = 36         # avisar quando faltar menos que isso pro cadastro fechar
@@ -28,5 +28,6 @@ SPORT_DEFAULT = 2
 
 # Sales / relatórios
 REPORT_HOUR = 9                   # relatório diário (horário de Brasília)
-EVENT_CHECK_HOURS = (7, 18)       # checagens de eventos
+EVENT_CHECK_HOURS = tuple(range(7, 23))  # checa eventos novos de hora em hora, 7h–22h
+MORNING_SUMMARY_HOUR = 7          # resumo com os melhores eventos abertos
 WEEKLY_REPORT_WEEKDAY = 0         # segunda-feira

@@ -209,7 +209,7 @@ def job_events(client, tg, state, morning=False):
 
     if first_run:
         top = by_score([x for x in relevant if x["status"] in ev_mod.OPEN_STATUSES])[:10]
-        msg = [f"🚀 <b>Bot ligado!</b> Encontrei {len(events)} eventos em SC/PR/RS nos próximos {config.DAYS_AHEAD} dias; "
+        msg = [f"🚀 <b>Bot ligado!</b> Encontrei {len(events)} eventos em SC/PR/RS nos próximos {config.DAYS_AHEAD // 30} meses; "
                f"{len(relevant)} passam nos seus filtros.\n\n<b>Melhores com cadastro aberto agora:</b>"]
         msg += [fmt_event(x) for x in top] or ["Nenhum aberto no momento."]
         tg.send("\n\n".join(msg))
@@ -217,7 +217,11 @@ def job_events(client, tg, state, morning=False):
 
     for ev in deadlines:
         tg.send("⏰ <b>Cadastro fechando!</b>\n\n" + fmt_event(ev))
-    if new:
+    if len(new) > 15:  # ex.: quando a busca passa a olhar mais longe
+        top = by_score([x for x in new if x["status"] in ev_mod.OPEN_STATUSES])[:10]
+        tg.send(f"🆕 <b>{len(new)} eventos novos</b> (inclusive meses à frente). "
+                f"Os 10 melhores com cadastro ou lista de espera aberta:\n\n" + "\n\n".join(fmt_event(x) for x in top))
+    elif new:
         tg.send(f"🆕 <b>{len(new)} evento(s) novo(s)</b>\n\n" + "\n\n".join(fmt_event(x) for x in by_score(new)))
     for ev, old_status in changed:
         what = "abriu vaga" if ev["status"] == "aberto" else "abriu lista de espera"
@@ -568,9 +572,13 @@ def job_auto(client, tg, state, commands=True):
     except Exception as ex:
         errors.append(f"vendas: {ex}")
 
-    for h in config.EVENT_CHECK_HOURS:
-        if t.hour >= h:
-            run(f"events-{today}-{h}", job_events, client, tg, state, morning=(h == config.EVENT_CHECK_HOURS[0]))
+    due = [h for h in config.EVENT_CHECK_HOURS if t.hour >= h]
+    if due:  # só a checagem mais recente (se o bot reiniciar às 15h, não roda 7h..15h em sequência)
+        h = due[-1]
+        morning = not done.get(f"morning-{today}")
+        run(f"events-{today}-{h}", job_events, client, tg, state, morning=morning)
+        if morning and done.get(f"events-{today}-{h}"):
+            done[f"morning-{today}"] = True
     if t.hour >= config.REPORT_HOUR:
         run(f"report-{today}", job_report, client, tg, state)
         if t.weekday() == config.WEEKLY_REPORT_WEEKDAY:

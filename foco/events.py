@@ -152,7 +152,7 @@ def fetch_all(client, days_ahead=None):
     out = {}
     for uf, sid in STATES.items():
         page = 1
-        while page <= 15:
+        while page <= 40:
             html = client.get(
                 "/competition/future",
                 {
