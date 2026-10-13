@@ -1,0 +1,60 @@
+name: foco-bot
+
+on:
+  schedule:
+    # cada execução fica 50 min escutando; a próxima já fica na fila
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: "O que rodar"
+        type: choice
+        default: listen
+        options: [listen, test, auto, events, sales, report, weekly]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: foco-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Rodar bot
+        env:
+          FOCO_USER: ${{ secrets.FOCO_USER }}
+          FOCO_PASSWORD: ${{ secrets.FOCO_PASSWORD }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          STATE_KEY: ${{ secrets.STATE_KEY }}
+        run: python main.py ${{ inputs.cmd || 'listen' }}
+
+      - name: Salvar memória do bot (criptografada)
+        if: always()
+        run: |
+          git config user.name "foco-bot"
+          git config user.email "foco-bot@users.noreply.github.com"
+          git add state/state.enc 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "estado do bot" -q
+          for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 5; done
+
+      - name: Emendar a próxima rodada (sem buraco entre uma e outra)
+        if: ${{ always() && (inputs.cmd || 'listen') == 'listen' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run bot.yml -f cmd=listen

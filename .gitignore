@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+state/state.json.tmp
+.DS_Store
+state/state.json
+state/*.tmp
