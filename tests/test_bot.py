@@ -141,11 +141,25 @@ class FlowTests(unittest.TestCase):
         main.job_sales(c, tg, state)                            # base
         self.assertIn("Monitor de vendas ligado", sent[-1])
         c.sales_html = SALES_HTML.replace("R$ 1.500,00</td><td>R$ 1.500,00</td><td>204", "R$ 1.520,00</td><td>R$ 1.520,00</td><td>206")
-        state["sold_codes"]["269944"] = ["https://cdn/x/RRLL1.jpg"]
+        state["sold_codes"]["269944"] = ["11055461|https://cdn/x/RRLL1.jpg"]
+        n = len(sent)
         main.job_sales(c, tg, state)
-        self.assertEqual(sent[-1][0], "fotos")
-        self.assertEqual(sent[-1][1], 2)
-        self.assertIn("+2 foto(s)", sent[-1][2])
+        albums = [x for x in sent[n:] if x[0] == "fotos"]
+        self.assertEqual(len(albums), 2)                       # um aviso por pedido
+        self.assertIn("Pedido 11055461", albums[0][2])
+        self.assertEqual(albums[0][1], 1)                      # só a foto nova desse pedido
+        self.assertIn("Pedido 11055904", albums[1][2])
+        self.assertIn("2 pedidos", albums[1][2])
+        # mesma venda de novo: nada é reenviado
+        c.sales_html = c.sales_html.replace("1.520,00</td><td>R$ 1.520,00</td><td>206", "1.530,00</td><td>R$ 1.530,00</td><td>207")
+        n = len(sent)
+        main.job_sales(c, tg, state)
+        self.assertEqual(sent[n:], [])                         # espera a foto aparecer
+        self.assertEqual(state["sales"]["269944"]["photos"], 206)
+        for _ in range(3):
+            main.job_sales(c, tg, state)
+        self.assertFalse([x for x in sent[n:] if x[0] == "fotos"])  # nunca reenvia fotos antigas
+        self.assertEqual(state["sales"]["269944"]["photos"], 207)
 
         main.job_report(c, tg, state)
         self.assertTrue(any(isinstance(x, str) and "Vila Germânica" in x for x in sent))

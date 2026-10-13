@@ -231,6 +231,56 @@ def job_events(client, tg, state, morning=False):
 
 # ============================================================ VENDAS
 
+def row_key(r):
+    """Identifica uma foto vendida dentro de um pedido (a mesma foto pode sair em pedidos diferentes)."""
+    return f"{r.get('order', '')}|{r['img']}"
+
+
+def newest_rows(rows, n):
+    by_order = {}
+    for r in rows:
+        by_order.setdefault(r["order"], []).append(r)
+    out = []
+    for order in sorted(by_order, key=lambda o: int(o) if o.isdigit() else 0, reverse=True):
+        if len(out) >= n:
+            break
+        out += by_order[order]
+    return out
+
+
+def notify_orders(tg, s, fresh, d_rev):
+    """Uma mensagem por pedido novo, com as fotos dele. Nada que já foi avisado é reenviado."""
+    if not fresh:
+        tg.send(f"💰 <b>Venda nova!</b> {e(s['name'])}\n+{brl(d_rev)}\n"
+                f"Total no evento: <b>{brl(s['revenue'])}</b> ({s['photos']} fotos)")
+        return
+    orders = {}
+    for r in fresh:
+        orders.setdefault(r["order"] or "?", []).append(r)
+    total_line = f"Total no evento: <b>{brl(s['revenue'])}</b> ({s['photos']} fotos)"
+    for i, (order, items) in enumerate(sorted(orders.items())):
+        kinds = {}
+        for r in items:
+            k = (r.get("res") or "Foto").split()[0]
+            kinds[k] = kinds.get(k, 0) + 1
+        mix = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items(), key=lambda x: -x[1]))
+        hours = sorted({r["hour"][:5] for r in items if r.get("hour")})
+        n = len(items)
+        cap = [f"🛒 <b>Pedido {e(order)}</b> · {n} foto{'s' if n > 1 else ''}",
+               f"{e(s['name'])}",
+               f"📸 {mix}"]
+        if hours:
+            cap.append("🕐 Tiradas às " + ", ".join(hours[:10]))
+        if len(orders) == 1:
+            cap.append(f"💵 +{brl(d_rev)}")
+        if i == len(orders) - 1:
+            if len(orders) > 1:
+                cap.append(f"💵 {len(orders)} pedidos, +{brl(d_rev)} no total")
+            cap.append(total_line)
+        imgs = [r["img"] for r in items]
+        for j in range(0, len(imgs), 10):  # Telegram aceita até 10 fotos por álbum
+            tg.photos(imgs[j:j + 10], "\n".join(cap) if j == 0 else f"Pedido {e(order)} (continuação)")
+
 def recent_ids(sales, days=45):
     cutoff = date.today() - timedelta(days=days)
     out = []
@@ -251,35 +301,35 @@ def job_sales(client, tg, state):
 
     if prev is None:  # primeira execução: só grava a base
         for cid in recent_ids(current):
-            codes[cid] = [r["img"] for r in sales_mod.fetch_sold_images(client, cid)]
+            codes[cid] = [row_key(r) for r in sales_mod.fetch_sold_images(client, cid)]
         state["sales"] = current
         total = sum(s["revenue"] for s in current.values())
         tg.send(f"💰 Monitor de vendas ligado. Ano até agora: <b>{brl(total)}</b> em "
                 f"{sum(s['photos'] for s in current.values())} fotos. Vou te avisar a cada venda nova.")
         return
 
-    for cid, s in current.items():
+    for cid, s in list(current.items()):
         old = prev.get(cid, {"revenue": 0, "photos": 0})
         d_photos = s["photos"] - old["photos"]
         d_rev = s["revenue"] - old["revenue"]
         if d_photos <= 0 and d_rev <= 0.009:
             continue
         rows = sales_mod.fetch_sold_images(client, cid)
-        known = set(codes.get(cid, []))
-        fresh = [r for r in rows if r["img"] not in known] if known or cid in codes else []
-        codes[cid] = [r["img"] for r in rows]
-        orders = {r["order"] for r in fresh if r["order"]}
-        caption = (f"💰 <b>Venda nova!</b> {e(s['name'])}\n"
-                   f"+{d_photos} foto(s) · +{brl(d_rev)}"
-                   + (f" · {len(orders)} pedido(s)" if orders else "")
-                   + f"\nTotal no evento: <b>{brl(s['revenue'])}</b> ({s['photos']} fotos)")
-        if fresh:
-            hours = sorted({r['hour'][:5] for r in fresh if r.get('hour')})
-            if hours:
-                caption += "\n🕐 Fotos tiradas às " + ", ".join(hours[:8])
-            tg.photos([r["img"] for r in fresh], caption)
+        if cid in codes:
+            known = set(codes[cid])
+            fresh = [r for r in rows if row_key(r) not in known and r["img"] not in known]
         else:
-            tg.send(caption)
+            # evento sem histórico salvo: os pedidos mais novos têm número maior
+            fresh = newest_rows(rows, d_photos)
+        retry = state.setdefault("sales_retry", {})
+        if not fresh and retry.get(cid, 0) < 3:
+            # total subiu mas a lista de fotos ainda não: tenta de novo na próxima checagem
+            retry[cid] = retry.get(cid, 0) + 1
+            current[cid] = dict(prev.get(cid, {"revenue": 0, "photos": 0}), **{k: s[k] for k in ("id", "name", "date")})
+            continue
+        retry.pop(cid, None)
+        codes[cid] = sorted({row_key(r) for r in rows} | set(codes.get(cid, [])))
+        notify_orders(tg, s, fresh, d_rev)
 
     state["sales"] = current
     # não deixa o estado crescer pra sempre
