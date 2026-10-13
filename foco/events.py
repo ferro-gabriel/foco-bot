@@ -45,6 +45,24 @@ def _grab(text, label, cast=_num):
     return cast(m.group(1)) if m else None
 
 
+def _event_id(w, modal):
+    """Número do evento. Na "Minha Agenda" o card vem sem o modal, então há outras fontes."""
+    if modal:
+        return modal["id"].rsplit("-", 1)[-1]
+    for attr in ("data-competition-id", "data-competition_id"):
+        el = w.select_one(f"[{attr}]")
+        if el and el[attr].isdigit():
+            return el[attr]
+    for el, attr, rx in ((w.select_one('[data-target^="#view-event-modal-"]'), "data-target", r"(\d+)$"),
+                         (w.select_one('a[id^="link-event-"]'), "id", r"(\d+)$"),
+                         (w.select_one('a[href*="/competition/information/"]'), "href", r"/information/(\d+)")):
+        if el:
+            m = re.search(rx, el.get(attr, ""))
+            if m:
+                return m.group(1)
+    return None
+
+
 def parse_future(html):
     soup = BeautifulSoup(html, "html.parser")
     events = []
@@ -53,12 +71,7 @@ def parse_future(html):
         if not card:
             continue
         modal = w.select_one('.modal[id^="view-event-modal-"]')
-        ev_id = None
-        if modal:
-            ev_id = modal["id"].rsplit("-", 1)[-1]
-        else:
-            btn = w.select_one("[data-competition-id]")
-            ev_id = btn["data-competition-id"] if btn else None
+        ev_id = _event_id(w, modal)
         if not ev_id:
             continue
 

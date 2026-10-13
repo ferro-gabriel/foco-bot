@@ -69,12 +69,30 @@ class ParseTests(unittest.TestCase):
         self.assertAlmostEqual(s["269944"]["revenue"], 1500.00)
         self.assertEqual(s["269944"]["photos"], 204)
 
+    def test_agenda_card_without_modal(self):
+        evs = events.parse_future(AGENDA_DAY_HTML)
+        self.assertEqual(len(evs), 1)
+        self.assertEqual((evs[0]["id"], evs[0]["city"], evs[0]["date"]), ("193965", "Blumenau", "2026-11-08"))
+
     def test_sold(self):
         rows = sales.parse_sold_images(SOLD_HTML)
         self.assertEqual([r["order"] for r in rows], ["11055461", "11055461", "11055904"])
         self.assertEqual(sales.hour_histogram(rows)[20], 2)
         ppo, _ = sales.photos_per_order(rows)
         self.assertAlmostEqual(ppo, 1.5)
+
+
+AGENDA_DAY_HTML = """<div class="col-md-6 col-sm-12 card-event-widget"><div class="event-card-fc ">
+<div class="event-card-header-fc"><h3 class="event-title-fc">CIRCUITO ANGELONI 2026 - BLUMENAU</h3>
+<a class="event-dropdown-link-fc" href="/competition/update-spot?id=193965">Editar</a>
+<a class="link-event" id="link-event-193965" href="https://www.focoradical.com.br/evento/x"></a></div>
+<div class="event-card-body"><div class="event-information-container"><div class="left-card-column">
+<div class="icon-text-card"><span class="event-text-fc event-city-fc">Corrida de Rua</span></div>
+<div class="icon-text-card icon-text-card-location-fc"><span class="event-text-fc"><span class="event-city-fc">Blumenau</span><span class="event-state-fc">/ SC</span></span></div>
+</div><div>08/11/26</div></div>
+<button class="event-button-fc" data-target="#view-event-modal-193965">Ver Evento</button>
+<a href="/competition/information/193965#uploads">Uploads</a>
+<button data-competition_id="193965">Informações</button></div></div></div>"""
 
 
 class FakeClient:
