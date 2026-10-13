@@ -158,28 +158,47 @@ def fetch_all(client, days_ahead=None):
     return list(out.values())
 
 
-def fetch_agenda(client, max_pages=6):
-    """Seus eventos: /competition/my-waiting-list traz inscritos e listas de espera."""
+def fetch_waitlist(client, max_pages=6):
+    """Pedidos pendentes: página "Na lista de espera" (ainda não estão na sua agenda)."""
     today = date.today().isoformat()
     out = {}
     for page in range(1, max_pages + 1):
         html = client.get("/competition/my-waiting-list", {"page": page})
-        soup = BeautifulSoup(html, "html.parser")
         evs = parse_future(html)
-        widgets = {}
-        for w in soup.select(".card-event-widget"):
-            m = w.select_one('.modal[id^="view-event-modal-"]')
-            if m:
-                widgets[m["id"].rsplit("-", 1)[-1]] = w.get_text(" ", strip=True)
         for ev in evs:
-            txt = widgets.get(ev["id"], "")
-            ev["mine"] = "inscrito" if "(Inscrito)" in txt else ("espera" if "lista de espera)" in txt.lower() else None)
-            if ev["mine"]:
-                out[ev["id"]] = ev
+            ev["mine"] = "espera"
+            out[ev["id"]] = ev
         # a lista vem da data mais distante para a mais antiga: para quando chegar no passado
         if not evs or all((e["date"] or "9999") < today for e in evs) or not has_next_page(html, page):
             break
     return {k: v for k, v in out.items() if (v["date"] or "9999") >= today}
+
+
+def fetch_schedule(client):
+    """Eventos confirmados: aba "Minha Agenda". A página traz quantos eventos há em cada dia;
+    os cards de cada dia vêm de /competition/load-competitions-by-date."""
+    today = date.today().isoformat()
+    html = client.get("/competition/schedule")
+    days = [d for d, n in re.findall(r'data-time-frame-index="([\d-]+)"\s+data-total-competitions="(\d+)"', html)
+            if int(n) > 0 and d >= today]
+    out = {}
+    for d in days:
+        part = client.get("/competition/load-competitions-by-date", {
+            "date": d, "CompetitionSearch[name]": "", "CompetitionSearch[group_by]": "day",
+            "day-group-date-picker": d,
+        })
+        for ev in parse_future(part):
+            ev["mine"] = "inscrito"
+            ev["date"] = ev["date"] or d
+            out[ev["id"]] = ev
+    return out
+
+
+def fetch_agenda(client):
+    """Agenda confirmada + pedidos na lista de espera (confirmado ganha)."""
+    agenda = {k: v for k, v in fetch_waitlist(client).items()}
+    agenda.update(fetch_schedule(client))
+    return agenda
 
 
 # ---------------------------------------------------------------- nota

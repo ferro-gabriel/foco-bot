@@ -92,8 +92,18 @@ class FakeClient:
         if path == "/competition/my-waiting-list":
             if not self.agenda_on:
                 return "<html></html>"
-            h = fx("future.html").replace("Ver Evento</button>", "Ver Evento (Inscrito)</button>", 1)
-            return h.replace("<button>Lista de Espera</button>", "<button>Ver Evento (Na lista de espera)</button>")
+            return fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')[0] + \
+                '<div class="col-md-4 col-sm-12 card-event-widget">' + fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')[3]
+        if path == "/competition/schedule":
+            if not self.agenda_on:
+                return "<html></html>"
+            return '<div class="time-frame" data-time-frame-index="2026-10-17" data-total-competitions="1"></div>' \
+                   '<div class="time-frame" data-time-frame-index="2026-10-18" data-total-competitions="0"></div>' \
+                   '<div class="time-frame" data-time-frame-index="2020-01-01" data-total-competitions="3"></div>'
+        if path == "/competition/load-competitions-by-date":
+            assert params["date"] == "2026-10-17", params
+            parts = fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')
+            return parts[0] + '<div class="col-md-4 col-sm-12 card-event-widget">' + parts[1]
         if path == "/accounting/orders-by-competition-by-user":
             return self.sales_html
         if path == "/report/sold-images":
@@ -168,7 +178,7 @@ class FlowTests(unittest.TestCase):
         evs = [{"id": "1", "date": "2026-10-17"}, {"id": "2", "date": "2026-10-18"}]
         agenda = {"9": {"id": "9", "date": "2026-10-17", "title": "MARATONA DE POMERODE 6KM", "mine": "inscrito"}}
         main.mark_agenda(evs, agenda)
-        self.assertEqual(evs[0]["conflicts"], ["Maratona De Pomerode 6Km (inscrito)"])
+        self.assertEqual(evs[0]["conflicts"], ["Maratona De Pomerode 6Km"])
         self.assertEqual(evs[1]["conflicts"], [])
 
 

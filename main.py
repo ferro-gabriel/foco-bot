@@ -79,7 +79,7 @@ def fmt_event(ev):
     if ev.get("mine") == "inscrito":
         lines.insert(1, "✅ <b>Você já está inscrito</b>")
     elif ev.get("mine") == "espera":
-        lines.insert(1, "⏳ <b>Você já está na lista de espera</b>")
+        lines.insert(1, "⏳ <b>Você já pediu (lista de espera, aguardando aprovação)</b>")
     if ev.get("conflicts"):
         lines.insert(1, "⚠️ Nesse dia você já tem: " + "; ".join(e(c) for c in ev["conflicts"]))
     return "\n".join(lines)
@@ -89,16 +89,13 @@ def mark_agenda(events, agenda):
     """Marca o que já é seu e avisa conflito de data com eventos em que você está inscrito."""
     by_date = {}
     for a in agenda.values():
-        if a.get("date"):
+        if a.get("date") and a.get("mine") == "inscrito":
             by_date.setdefault(a["date"], []).append(a)
     for ev in events:
         mine = agenda.get(ev["id"])
         ev["mine"] = mine["mine"] if mine else None
         same_day = [a for a in by_date.get(ev.get("date"), []) if a["id"] != ev["id"]]
-        ev["conflicts"] = [
-            a["title"].title()[:45] + (" (inscrito)" if a["mine"] == "inscrito" else " (lista de espera)")
-            for a in same_day
-        ]
+        ev["conflicts"] = [a["title"].title()[:45] for a in same_day]
     return events
 
 
@@ -112,16 +109,27 @@ def get_agenda(client, state):
 
 
 def fmt_agenda(agenda):
-    if not agenda:
-        return "🗓 Sua agenda está vazia."
-    lines = ["🗓 <b>Sua agenda</b>"]
-    for a in sorted(agenda.values(), key=lambda x: x.get("date") or ""):
+    def line(a):
         d = datetime.fromisoformat(a["date"])
-        icon = "✅" if a["mine"] == "inscrito" else "⏳"
         dist = f" · 🚗 {a['km']} km" if a.get("km") is not None else ""
-        lines.append(f"{icon} <b>{WEEKDAYS[d.weekday()]} {d.strftime('%d/%m')}</b> · {e(a['title'].title())}\n"
-                     f"      📍 {e(a['city'])}/{e(a['uf'])}{dist}")
-    lines.append("\n✅ inscrito · ⏳ lista de espera")
+        return (f"<b>{WEEKDAYS[d.weekday()]} {d.strftime('%d/%m/%y')}</b> · {e(a['title'].title())}\n"
+                f"      📍 {e(a['city'])}/{e(a['uf'])}{dist}")
+
+    confirmed = sorted([a for a in agenda.values() if a["mine"] == "inscrito"], key=lambda x: x["date"])
+    pending = sorted([a for a in agenda.values() if a["mine"] == "espera"], key=lambda x: x["date"])
+    lines = ["🗓 <b>Sua agenda (Minha Agenda)</b>"]
+    if confirmed:
+        per_day = {}
+        for a in confirmed:
+            per_day.setdefault(a["date"], []).append(a)
+        for a in confirmed:
+            warn = " ⚠️ <i>2+ eventos no dia</i>" if len(per_day[a["date"]]) > 1 else ""
+            lines.append("✅ " + line(a) + warn)
+    else:
+        lines.append("Nenhum evento confirmado daqui pra frente.")
+    if pending:
+        lines.append("\n⏳ <b>Aguardando aprovação (lista de espera)</b>")
+        lines += ["⏳ " + line(a) for a in pending]
     return "\n".join(lines)
 
 
@@ -134,11 +142,11 @@ def check_agenda_changes(agenda, tg, state):
         before = (old.get(k) or {}).get("mine")
         if v["mine"] == "inscrito" and before == "espera":
             d = datetime.fromisoformat(v["date"])
-            tg.send(f"🎉 <b>Você foi aprovado!</b>\n{e(v['title'])}\n📅 {WEEKDAYS[d.weekday()]} {d.strftime('%d/%m')} · 📍 {e(v['city'])}/{e(v['uf'])}")
+            tg.send(f"🎉 <b>Você foi aprovado! Entrou na sua agenda:</b>\n{e(v['title'])}\n📅 {WEEKDAYS[d.weekday()]} {d.strftime('%d/%m')} · 📍 {e(v['city'])}/{e(v['uf'])}")
     for k, v in old.items():
         if k not in agenda and v.get("mine") == "espera" and (v.get("date") or "") >= date.today().isoformat():
-            tg.send(f"ℹ️ Você saiu da lista de espera de <b>{e(v['title'])}</b> ({v['date'][8:10]}/{v['date'][5:7]}). "
-                    "Pode ter sido recusado ou a lista foi fechada.")
+            tg.send(f"ℹ️ <b>{e(v['title'])}</b> ({v['date'][8:10]}/{v['date'][5:7]}) saiu da sua lista de espera "
+                    "e não entrou na agenda. Pode ter sido recusado ou a lista foi fechada.")
 
 
 def enrich(events, state):
@@ -395,7 +403,7 @@ def job_weekly(client, tg, state, save=True):
 HELP = """🤖 <b>Comandos</b>
 /relatorio – vendas desde o relatório das 9h + Vila
 /vendas – checa vendas novas agora
-/agenda – seus eventos (inscrito e lista de espera)
+/agenda – sua agenda confirmada + o que está aguardando aprovação
 /eventos – melhores eventos abertos agora, comparados com sua agenda
 /semana – resumo da semana
 /ajuda – esta lista
