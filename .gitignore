@@ -5,3 +5,4 @@ state/state.json.tmp
 .DS_Store
 state/state.json
 state/*.tmp
+HISTORICO.md
