@@ -579,6 +579,7 @@ def job_listen(client, tg, state, minutes=50, sales_every=180):
         if time.time() - last_sales >= sales_every:
             job_auto(client, tg, state, commands=False)
             last_sales = time.time()
+            st.save(state)  # se a rodada for cancelada, o que já foi avisado não se perde
         process_commands(client, tg, state, timeout=25)
 
 
