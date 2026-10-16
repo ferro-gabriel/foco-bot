@@ -18,17 +18,30 @@ def fx(name):
         return f.read()
 
 
-SALES_HTML = """<table><thead><tr><th>Evento</th></tr></thead><tbody>
-<tr><td>255342 - OKTOBERFEST RUN 2026</td><td>11/10/2026</td><td>R$ 1.000,00</td><td>R$ 1.000,00</td><td>127</td><td><a>x</a></td></tr>
-<tr><td>269944 - VILA GERMÂNICA 41ª OKTOBERFEST BLUMENAU 2026</td><td>07/10/2026</td><td>R$ 1.500,00</td><td>R$ 1.500,00</td><td>204</td><td></td></tr>
-<tr><td>TOTAL</td><td></td><td>R$ 2.500,00</td><td></td><td>331</td></tr>
-</tbody></table>"""
+def sales_json(vila_rev=1500.0, vila_photos=204):
+    return {"items": [
+        {"competitionId": 255342, "competitionName": "OKTOBERFEST RUN 2026", "date": "2026-10-11",
+         "photographerIncome": 1000.0, "spotCreatorIncome": 0, "photoCount": 127, "videoCount": 2, "orderCount": 120},
+        {"competitionId": 269944, "competitionName": "VILA GERMÂNICA 41ª OKTOBERFEST BLUMENAU 2026", "date": "2026-10-07",
+         "photographerIncome": vila_rev, "spotCreatorIncome": 0, "photoCount": vila_photos, "videoCount": 0, "orderCount": 150},
+    ], "pagination": {"page": 1, "pageSize": 50, "pageCount": 1, "totalCount": 2}}
 
-SOLD_HTML = """<div id="w5-tab0"><table><tbody>
-<tr><td>11055461</td><td>Premium 4500 Pixels</td><td>RRLL1</td><td><img src="https://cdn/x/RRLL1.jpg"></td><td>22:11:21</td><td>Ver</td></tr>
-<tr><td></td><td>Alta 3450 Pixels</td><td>RRLL2</td><td><img src="https://cdn/x/RRLL2.jpg"></td><td>20:05:00</td><td>Ver</td></tr>
-<tr><td>11055904</td><td>Premium 4500 Pixels</td><td>RRLL3</td><td><img src="https://cdn/x/RRLL3.jpg"></td><td>20:40:00</td><td>Ver</td></tr>
-</tbody></table></div>"""
+
+def sold_item(order, code, res="Premium 4500 Pixels", taken="2026-10-12 22:11:21"):
+    return {"orderId": order, "resolution": res, "code": code, "thumbUrl": f"https://cdn/x/ident/{code}.jpg",
+            "takenAt": taken, "viewUrl": f"/photo/open?path=x%2F{code}.jpg&bucket=orders", "downloadUrl": None}
+
+
+SOLD_ITEMS = [
+    sold_item(11055461, "RRLL2699441"),
+    sold_item(11055461, "RRLL2699442", "Alta 3450 Pixels", "2026-10-12 20:05:00"),
+    sold_item(11055904, "RRLL2699443", taken="2026-10-12 20:40:00"),
+]
+
+
+def confirmed(item, order, code, paid, res="Premium 4500 Pixels", comm=7.4):
+    return {"photoCode": code, "orderId": order, "photographerCommission": comm, "creatorCommission": 0,
+            "orderDate": paid, "paymentDate": paid, "paymentTypeName": "Pagarme Pix", "imageTypeName": res}
 
 
 class ParseTests(unittest.TestCase):
@@ -64,10 +77,17 @@ class ParseTests(unittest.TestCase):
         self.assertGreaterEqual(s, 5)
 
     def test_sales(self):
-        s = sales.parse_sales_table(SALES_HTML)
+        s = sales.parse_sales_json(sales_json())
         self.assertEqual(set(s), {"255342", "269944"})
         self.assertAlmostEqual(s["269944"]["revenue"], 1500.00)
         self.assertEqual(s["269944"]["photos"], 204)
+        self.assertEqual(s["269944"]["date"], "07/10/2026")
+        self.assertEqual(sales.comp_of("RRLL2699441151020262232", s), "269944")
+
+    def test_confirmed(self):
+        items = sales.parse_confirmed({"items": [confirmed(None, 1, "RRLL1", "2026-10-16 14:41:08")]})
+        self.assertEqual(items[0]["paid_at"][:16], "2026-10-16T11:41")  # UTC → Brasília
+        self.assertEqual(items[0]["payment"], "Pix")
 
     def test_agenda_card_without_modal(self):
         evs = events.parse_future(AGENDA_DAY_HTML)
@@ -75,11 +95,13 @@ class ParseTests(unittest.TestCase):
         self.assertEqual((evs[0]["id"], evs[0]["city"], evs[0]["date"]), ("193965", "Blumenau", "2026-11-08"))
 
     def test_sold(self):
-        rows = sales.parse_sold_images(SOLD_HTML)
+        rows = sales.parse_sold_json({"type": "photo", "items": SOLD_ITEMS})
         self.assertEqual([r["order"] for r in rows], ["11055461", "11055461", "11055904"])
+        self.assertTrue(rows[0]["view"].startswith("/photo/open"))
         self.assertEqual(sales.hour_histogram(rows)[20], 2)
         ppo, _ = sales.photos_per_order(rows)
         self.assertAlmostEqual(ppo, 1.5)
+
 
 
 AGENDA_DAY_HTML = """<div class="col-md-6 col-sm-12 card-event-widget"><div class="event-card-fc ">
@@ -98,8 +120,24 @@ AGENDA_DAY_HTML = """<div class="col-md-6 col-sm-12 card-event-widget"><div clas
 class FakeClient:
     """Simula o site: vendas crescem entre as chamadas."""
     def __init__(self):
-        self.sales_html = SALES_HTML
+        self.sales = sales_json()
+        self.confirmed = [confirmed(None, 11050000, "RRLL2699440", "2026-10-12 10:00:00")]
         self.agenda_on = False
+        self.downloads = 0
+
+    def get_json(self, path, params=None):
+        if path == "/next-api/accounting/orders-by-competition-by-user":
+            return self.sales
+        if path == "/next-api/accounting/confirmed-orders":
+            return {"items": self.confirmed, "_meta": {"pageCount": 1}}
+        if path == "/next-api/report/sold-images":
+            items = SOLD_ITEMS if params["type"] == "photo" else []
+            return {"type": params["type"], "items": items, "pagination": {"pageCount": 1}}
+        raise AssertionError(path)
+
+    def download(self, path):
+        self.downloads += 1
+        return b"jpg"
 
     def login(self):
         pass
@@ -122,17 +160,10 @@ class FakeClient:
             assert params["date"] == "2026-10-17", params
             parts = fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')
             return parts[0] + '<div class="col-md-4 col-sm-12 card-event-widget">' + parts[1]
-        if path == "/accounting/orders-by-competition-by-user":
-            return self.sales_html
-        if path == "/report/sold-images":
-            return SOLD_HTML if (params or {}).get("page-photo", 1) == 1 else "<table></table>"
         if path == "/accounting/get-convertion-by-competition":
             return "<table><tr><th>Receita Media</th><th>Media de Fotos</th></tr><tr><td>R$ 1.200,00</td><td>184,92</td></tr></table>"
         if path == "/accounting/get-image-type-by-competition":
-            return "<table><tr><td>Premium 4500 Pixels</td><td>158</td><td>R$ 2.000,00</td></tr><tr><td>Alta 3450 Pixels</td><td>43</td><td>R$ 500,00</td></tr><tr><td>TOTAL</td><td>201</td><td>R$ 1,00</td></tr></table>"
-        if path == "/report/orders":
-            return ("<table><tbody><tr><td>11055461</td><td>13/10/2026 09:00</td><td>Ver</td></tr>"
-                    "<tr><td>11055904</td><td>12/10/2026 22:15</td><td>Ver</td></tr></tbody></table>")
+            return "<table><tr><td>Premium 4500 Pixels</td><td>158</td></tr><tr><td>Alta 3450 Pixels</td><td>43</td></tr><tr><td>TOTAL</td><td>201</td></tr></table>"
         if path == "/report/order-detail":
             return "<div><span>Nome do Cliente</span><span>Fulano</span><span>Total</span><span>R$ 19,90</span></div>"
         raise AssertionError(path)
@@ -148,6 +179,8 @@ class FlowTests(unittest.TestCase):
         sent = []
         tg.send = lambda t: sent.append(t)
         tg.photos = lambda urls, cap=None: sent.append(("fotos", len(urls), cap))
+        tg.album = lambda items, cap=None: sent.append(
+            ("album", ["sem marca" if i.get("data") else "miniatura" for i in items], cap))
         c = FakeClient()
 
         with mock.patch.object(events, "fetch_all", lambda client: events.parse_future(fx("future.html"))):
@@ -163,29 +196,28 @@ class FlowTests(unittest.TestCase):
 
         main.job_sales(c, tg, state)                            # base
         self.assertIn("Monitor de vendas ligado", sent[-1])
-        c.sales_html = SALES_HTML.replace("R$ 1.500,00</td><td>R$ 1.500,00</td><td>204", "R$ 1.520,00</td><td>R$ 1.520,00</td><td>206")
-        state["sold_codes"]["269944"] = ["11055461|https://cdn/x/RRLL1.jpg"]
+        c.sales = sales_json(1520.0, 207)
+        c.confirmed = [confirmed(None, 11055904, "RRLL2699443", "2026-10-13 01:15:00"),
+                       confirmed(None, 11055461, "RRLL2699441", "2026-10-13 00:00:00"),
+                       confirmed(None, 11055461, "RRLL2699442", "2026-10-13 00:00:00", "Alta 3450 Pixels", 5.0)] + c.confirmed
         n = len(sent)
         main.job_sales(c, tg, state)
-        albums = [x for x in sent[n:] if x[0] == "fotos"]
+        albums = [x for x in sent[n:] if x[0] == "album"]
         self.assertEqual(len(albums), 2)                       # um aviso por pedido
         self.assertIn("Pedido 11055461", albums[0][2])
-        self.assertIn("Vendido", albums[0][2])
+        self.assertIn("1 Premium, 1 Alta", albums[0][2])
+        self.assertIn("Pago 12/10 às 21:00 · Pix", albums[0][2])
+        self.assertIn("Sua parte: <b>+R$ 12,40</b>", albums[0][2])
         self.assertIn("cliente pagou R$ 19,90", albums[0][2])
+        self.assertIn("VILA GERMÂNICA", albums[0][2])
+        self.assertIn("Média dos fotógrafos", albums[0][2])
         self.assertNotIn("Fulano", albums[0][2])
-        self.assertEqual(albums[0][1], 1)                      # só a foto nova desse pedido
+        self.assertEqual(albums[0][1], ["sem marca", "sem marca"])  # fotos baixadas do painel
         self.assertIn("Pedido 11055904", albums[1][2])
-        self.assertIn("2 pedidos", albums[1][2])
         # mesma venda de novo: nada é reenviado
-        c.sales_html = c.sales_html.replace("1.520,00</td><td>R$ 1.520,00</td><td>206", "1.530,00</td><td>R$ 1.530,00</td><td>207")
         n = len(sent)
-        main.job_sales(c, tg, state)
-        self.assertEqual(sent[n:], [])                         # espera a foto aparecer
-        self.assertEqual(state["sales"]["269944"]["photos"], 206)
-        for _ in range(3):
-            main.job_sales(c, tg, state)
-        self.assertFalse([x for x in sent[n:] if x[0] == "fotos"])  # nunca reenvia fotos antigas
-        self.assertEqual(state["sales"]["269944"]["photos"], 207)
+        self.assertEqual(main.job_sales(c, tg, state), 0)
+        self.assertEqual(sent[n:], [])
 
         main.job_report(c, tg, state)
         self.assertTrue(any(isinstance(x, str) and "Vila Germânica" in x for x in sent))

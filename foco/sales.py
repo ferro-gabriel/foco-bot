@@ -1,12 +1,27 @@
-"""Vendas: totais por evento, fotos vendidas e média dos fotógrafos."""
+"""Vendas: totais por evento, fotos vendidas, pedidos e média dos fotógrafos.
+
+Desde out/2026 as telas de vendas do painel são novas e leem uma API JSON (/next-api/...).
+Os relatórios antigos que ainda existem (média, tipo de imagem, detalhe do pedido) seguem em HTML.
+"""
 import re
 from collections import Counter
-from datetime import date
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 
+TZ = ZoneInfo("America/Sao_Paulo")
+PAYMENT = {"pix": "Pix", "credito": "cartão de crédito", "crédito": "cartão de crédito", "debito": "cartão de débito",
+           "boleto": "boleto"}
+
+
+class SiteChanged(RuntimeError):
+    """O painel respondeu, mas sem os dados esperados: o layout provavelmente mudou."""
+
 
 def _money(s):
+    if isinstance(s, (int, float)):
+        return float(s)
     s = (s or "").replace("R$", "").replace(".", "").replace(",", ".").strip()
     try:
         return float(s)
@@ -15,81 +30,182 @@ def _money(s):
 
 
 def _int(s):
+    if isinstance(s, (int, float)):
+        return int(s)
     try:
         return int((s or "0").replace(".", "").strip())
     except ValueError:
         return 0
 
 
-def parse_sales_table(html):
-    """/accounting/orders-by-competition-by-user → {id: {...}}"""
-    soup = BeautifulSoup(html, "html.parser")
+def _br_date(iso):
+    """'2026-10-11' → '11/10/2026' (formato usado no resto do bot)."""
+    try:
+        return datetime.strptime((iso or "")[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    except ValueError:
+        return iso or ""
+
+
+def _pages(j):
+    p = j.get("pagination") or {}
+    meta = j.get("_meta") or {}
+    return int(p.get("pageCount") or meta.get("pageCount") or 1)
+
+
+# ---------------------------------------------------------------- vendas por evento
+
+def parse_sales_json(j):
+    """/next-api/accounting/orders-by-competition-by-user → {id: {...}}"""
     out = {}
-    for tr in soup.select("table tbody tr"):
-        tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
-        if len(tds) < 5:
-            continue
-        m = re.match(r"(\d+)\s*-\s*(.+)", tds[0])
-        if not m:
-            continue
-        out[m.group(1)] = {
-            "id": m.group(1),
-            "name": m.group(2).strip(),
-            "date": tds[1],
-            "revenue": _money(tds[2]),
-            "photos": _int(tds[4]),
+    for it in j.get("items") or []:
+        cid = str(it["competitionId"])
+        out[cid] = {
+            "id": cid,
+            "name": (it.get("competitionName") or "").strip(),
+            "date": _br_date(it.get("date")),
+            "revenue": round(_money(it.get("photographerIncome")) + _money(it.get("spotCreatorIncome")), 2),
+            "photos": _int(it.get("photoCount")),
+            "videos": _int(it.get("videoCount")),
+            "orders": _int(it.get("orderCount")),
         }
     return out
 
 
-def fetch_sales(client, year=None):
-    year = year or date.today().year
-    html = client.get("/accounting/orders-by-competition-by-user", {"OrdersByCompetitionSearch[year]": year})
-    data = parse_sales_table(html)
-    if not data:  # se o parâmetro de ano não existir, usa o padrão da página
-        data = parse_sales_table(client.get("/accounting/orders-by-competition-by-user"))
-    return data
+def fetch_sales(client):
+    out, page = {}, 1
+    while page <= 20:
+        j = client.get_json("/next-api/accounting/orders-by-competition-by-user", {"page": page})
+        out.update(parse_sales_json(j))
+        if page >= _pages(j):
+            break
+        page += 1
+    if not out:
+        raise SiteChanged("O relatório 'Vendas por evento' veio vazio (o painel mudou?)")
+    return out
 
 
-def parse_sold_images(html):
-    soup = BeautifulSoup(html, "html.parser")
-    pane = soup.select_one('[id$="-tab0"]') or soup
-    rows, order = [], ""
-    for tr in pane.select("table tbody tr"):
-        img = tr.find("img")
-        if not img:
-            continue
-        tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
-        if tds and tds[0]:
-            order = tds[0]
-        code = tds[2] if len(tds) > 2 else img.get("src", "").rsplit("/", 1)[-1].split(".")[0]
+# ---------------------------------------------------------------- fotos/vídeos vendidos
+
+def parse_sold_json(j):
+    kind = j.get("type") or "photo"
+    rows = []
+    for it in j.get("items") or []:
+        taken = it.get("takenAt") or ""
         rows.append({
-            "order": order,
-            "res": tds[1] if len(tds) > 1 else "",
-            "code": code,
-            "hour": tds[4] if len(tds) > 4 else "",
-            "img": img.get("src"),
+            "order": str(it.get("orderId") or ""),
+            "res": it.get("resolution") or "",
+            "code": it.get("code") or "",
+            "hour": taken[11:19],
+            "img": it.get("thumbUrl"),        # miniatura com marca d'água (pública)
+            "view": it.get("viewUrl"),        # arquivo vendido, sem marca d'água (precisa de login)
+            "video": kind == "video",
         })
     return rows
 
 
-def fetch_sold_images(client, comp_id, max_pages=40):
-    all_rows, prev_first = [], None
-    for page in range(1, max_pages + 1):
-        html = client.get("/report/sold-images", {
-            "SoldImages[competition_id]": comp_id, "page-photo": page, "per-page": 50,
-        })
-        rows = parse_sold_images(html)
-        if not rows or rows[0]["img"] == prev_first:
-            break
-        prev_first = rows[0]["img"]
-        seen = {r["img"] + r["order"] for r in all_rows}
-        new = [r for r in rows if r["img"] + r["order"] not in seen]
-        if not new:  # página repetida = acabou
-            break
-        all_rows.extend(new)
-    return all_rows
+def _sold_page(client, comp_id, kind, page):
+    return client.get_json("/next-api/report/sold-images",
+                           {"competition_id": comp_id, "type": kind, "page-photo": page})
 
+
+def fetch_sold_images(client, comp_id, kinds=("photo", "video"), max_pages=80):
+    """Todas as fotos (e vídeos) vendidas no evento. A API devolve 10 por página."""
+    rows = []
+    for kind in kinds:
+        page = 1
+        while page <= max_pages:
+            j = _sold_page(client, comp_id, kind, page)
+            rows += parse_sold_json(j)
+            if page >= _pages(j):
+                break
+            page += 1
+    return rows
+
+
+def find_sold(client, comp_id, codes, max_pages=8):
+    """Acha fotos vendidas pelo código. A lista vem do pedido mais antigo pro mais novo,
+    então procura de trás pra frente (as vendas novas estão nas últimas páginas)."""
+    want, found = set(codes), {}
+    for kind in ("photo", "video"):
+        first = _sold_page(client, comp_id, kind, 1)
+        last = _pages(first)
+        p = last
+        while want - set(found) and p >= 1 and last - p < max_pages:
+            j = first if p == 1 else _sold_page(client, comp_id, kind, p)
+            for r in parse_sold_json(j):
+                if r["code"] in want:
+                    found.setdefault(r["code"], r)
+            p -= 1
+        if not want - set(found):
+            break
+    return found
+
+
+# ---------------------------------------------------------------- pedidos confirmados
+
+def payment_name(s):
+    low = (s or "").lower()
+    for k, v in PAYMENT.items():
+        if k in low:
+            return v
+    return re.sub(r"(?i)^pagarme\s+", "", s or "").strip()
+
+
+def to_local(stamp):
+    """Datas da API de pedidos vêm em UTC."""
+    try:
+        dt = datetime.strptime(stamp[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    return dt.astimezone(TZ)
+
+
+def parse_confirmed(j):
+    out = []
+    for it in j.get("items") or []:
+        paid = to_local(it.get("paymentDate") or it.get("orderDate"))
+        out.append({
+            "key": f"{it.get('orderId')}|{it.get('photoCode')}",
+            "order": str(it.get("orderId") or ""),
+            "code": it.get("photoCode") or "",
+            "res": it.get("imageTypeName") or "",
+            "commission": round(_money(it.get("photographerCommission")) + _money(it.get("creatorCommission")), 2),
+            "paid_at": paid.isoformat() if paid else None,
+            "payment": payment_name(it.get("paymentTypeName")),
+        })
+    return out
+
+
+def fetch_confirmed(client, known=None, today=None, max_pages=10):
+    """Fotos vendidas, da mais nova pra mais antiga (50 por página). Para quando já passou
+    por vendas conhecidas e (se `today` for dado) já cobriu todas as vendas de hoje."""
+    known = known or set()
+    out = []
+    for page in range(1, max_pages + 1):
+        j = client.get_json("/next-api/accounting/confirmed-orders", {"page": page, "per-page": 50})
+        items = parse_confirmed(j)
+        out += items
+        if not items or page >= _pages(j):
+            break
+        hit_known = any(i["key"] in known for i in items)
+        oldest = min((i["paid_at"] or "") for i in items)[:10]
+        if page >= 2 and hit_known and (not today or oldest < today):
+            break
+        if not known and (not today or oldest < today):
+            break
+    return out
+
+
+def comp_of(code, comp_ids):
+    """'RRLL2699441151020262232' → '269944' (o código da foto começa com o número do evento)."""
+    digits = re.sub(r"^[A-Za-z]+", "", code or "")
+    for cid in sorted(comp_ids, key=len, reverse=True):
+        if digits.startswith(cid):
+            return cid
+    return None
+
+
+# ---------------------------------------------------------------- relatórios antigos (HTML)
 
 def fetch_average(client, comp_id):
     """Receita média e fotos médias dos fotógrafos no evento."""
@@ -107,10 +223,20 @@ def fetch_image_types(client, comp_id):
     out = {}
     for tr in soup.select("tr"):
         tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
-        if len(tds) >= 3 and tds[0] != "TOTAL":
-            out[tds[0]] = {"qty": _int(tds[1]), "gross": _money(tds[2])}
+        if len(tds) >= 2 and tds[0].upper() != "TOTAL":
+            out[tds[0]] = {"qty": _int(tds[1]), "gross": _money(tds[2]) if len(tds) > 2 else None}
     return out
 
+
+def fetch_order_total(client, order_id):
+    """Valor pago no pedido. A página tem dados do cliente: lemos só o total."""
+    html = client.get("/report/order-detail", {"id": order_id})
+    txt = BeautifulSoup(html, "html.parser").get_text("|", strip=True)
+    m = re.search(r"\|Total\|\s*R\$\s*([\d.,]+)", txt)
+    return _money(m.group(1)) if m else None
+
+
+# ---------------------------------------------------------------- contas
 
 def hour_histogram(rows):
     c = Counter()
@@ -124,26 +250,3 @@ def hour_histogram(rows):
 def photos_per_order(rows):
     orders = Counter(r["order"] for r in rows if r.get("order"))
     return (len(rows) / len(orders)) if orders else 0.0, orders
-
-
-def fetch_order_times(client, when):
-    """{pedido: "dd/mm/aaaa hh:mm"} do relatório "Dados do pedido" (mês atual e anterior)."""
-    out = {}
-    months = [(when.month, when.year)]
-    prev = (when.month - 1 or 12, when.year - (1 if when.month == 1 else 0))
-    months.append(prev)
-    for month, year in months:
-        html = client.get("/report/orders", {"Report[month]": month, "Report[year]": year})
-        for tr in BeautifulSoup(html, "html.parser").select("table tbody tr"):
-            tds = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
-            if len(tds) >= 2 and tds[0].isdigit():
-                out[tds[0]] = tds[1]
-    return out
-
-
-def fetch_order_total(client, order_id):
-    """Valor pago no pedido. A página tem dados do cliente: lemos só o total."""
-    html = client.get("/report/order-detail", {"id": order_id})
-    txt = BeautifulSoup(html, "html.parser").get_text("|", strip=True)
-    m = re.search(r"\|Total\|\s*R\$\s*([\d.,]+)", txt)
-    return _money(m.group(1)) if m else None

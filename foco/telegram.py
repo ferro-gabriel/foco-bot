@@ -1,4 +1,5 @@
 """Envio para o Telegram. Sem token configurado, só imprime no terminal (modo teste)."""
+import json
 import os
 import time
 
@@ -22,6 +23,20 @@ class Telegram:
             r = requests.post(API.format(token=self.token, method=method), json=payload, timeout=30)
             data = r.json()
         return data
+
+    def _upload(self, method, data, files):
+        url = API.format(token=self.token, method=method)
+        for _ in range(2):
+            try:
+                r = requests.post(url, data=data, files=files, timeout=180)
+                out = r.json()
+            except (requests.RequestException, ValueError) as ex:
+                out = {"ok": False, "description": str(ex)}
+            if not out.get("ok") and out.get("error_code") == 429:
+                time.sleep(out.get("parameters", {}).get("retry_after", 5))
+                continue
+            return out
+        return out
 
     def ensure_chat(self):
         """Descobre o chat_id sozinho: basta mandar qualquer mensagem pro bot uma vez."""
@@ -101,3 +116,51 @@ class Telegram:
             self._call("sendPhoto", chat_id=self.chat_id, photo=urls[0], caption=caption or "", parse_mode="HTML")
         else:
             self._call("sendMediaGroup", chat_id=self.chat_id, media=media)
+
+    def album(self, items, caption=None):
+        """Álbum com arquivos baixados do painel (fotos sem marca d'água / vídeos).
+        items: [{"data": bytes|None, "url": miniatura pública (plano B), "video": bool}]"""
+        items = [i for i in items if i.get("data") or i.get("url")][:10]
+        caption = (caption or "")[:1024]
+        if not items:
+            if caption:
+                self.send(caption)
+            return
+        if self.dry:
+            kinds = ["vídeo" if i.get("video") and i.get("data") else ("sem marca" if i.get("data") else "miniatura")
+                     for i in items]
+            print(f"[{len(items)} arquivos: {', '.join(kinds)}] {caption}")
+            return
+        if not self.ensure_chat():
+            return
+        media, files = [], {}
+        for n, it in enumerate(items):
+            kind = "video" if it.get("video") and it.get("data") else "photo"
+            if it.get("data"):
+                name = f"f{n}"
+                files[name] = (f"{name}.{'mp4' if kind == 'video' else 'jpg'}", it["data"],
+                               "video/mp4" if kind == "video" else "image/jpeg")
+                media.append({"type": kind, "media": f"attach://{name}"})
+            else:
+                media.append({"type": "photo", "media": it["url"]})
+        if caption:
+            media[0].update(caption=caption, parse_mode="HTML")
+        if len(media) == 1:
+            m = media[0]
+            method = "sendVideo" if m["type"] == "video" else "sendPhoto"
+            field = "video" if m["type"] == "video" else "photo"
+            data = {"chat_id": self.chat_id, "caption": caption, "parse_mode": "HTML"}
+            if files:
+                out = self._upload(method, data, {field: next(iter(files.values()))})
+            else:
+                out = self._call(method, chat_id=self.chat_id, caption=caption, parse_mode="HTML", **{field: m["media"]})
+        else:
+            out = self._upload("sendMediaGroup", {"chat_id": self.chat_id, "media": json.dumps(media)}, files)
+        if not out.get("ok"):
+            # foto recusada (tamanho/formato): manda pelo menos o texto e as miniaturas
+            print("Telegram recusou o álbum:", (out.get("description") or "")[:200])
+            thumbs = [i["url"] for i in items if i.get("url")]
+            if thumbs:
+                self.photos(thumbs, caption)
+            elif caption:
+                self.send(caption)

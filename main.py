@@ -11,6 +11,7 @@ Uso:
 """
 import html
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -59,6 +60,17 @@ def fmt_event(ev):
         extra.append("🤝 Parceria Foco")
     if ev.get("commission"):
         extra.append(f"💵 {int(ev['commission'])}%")
+    prices = [f"{lbl} {brl(ev[k])}" for k, lbl in (("price_premium", "Premium"), ("price_high", "Alta"),
+              ("price_medium", "Média"), ("price_low", "Baixa"), ("price_video", "Vídeo")) if ev.get(k)]
+    info = []
+    if ev.get("credits"):
+        info.append(f"🪙 {int(ev['credits'])} créditos")
+    if ev.get("points"):
+        info.append(f"🏅 {int(ev['points'])} pontos")
+    if ev.get("organizer"):
+        info.append(f"🏢 {e(ev['organizer'])}")
+    if ev.get("launch"):
+        info.append(f"🚀 lançamento {e(ev['launch'])}")
     deadline = ""
     if ev.get("deadline"):
         try:
@@ -74,6 +86,8 @@ def fmt_event(ev):
         f"📍 {e(ev['city'])}/{e(ev['uf'])}{dist} · 📅 {WEEKDAYS[d.weekday()] + ' ' + d.strftime('%d/%m') if d else '?'}",
         f"🏷 {e(ev['sport'])}" + (" · " + " · ".join(extra) if extra else ""),
         f"⭐ <b>{ev['score']}</b>/10 · {ev_mod.STATUS_LABEL.get(ev['status'], ev['status'])}{deadline}",
+        *(["💲 " + " · ".join(prices)] if prices else []),
+        *([" · ".join(info)] if info else []),
         f"<a href=\"{panel}\">Abrir no painel</a>" + (f" · <a href=\"{e(ev['link'])}\">página do evento</a>" if ev.get("link") else ""),
     ]
     if ev.get("mine") == "inscrito":
@@ -235,70 +249,86 @@ def job_events(client, tg, state, morning=False):
 
 # ============================================================ VENDAS
 
-def row_key(r):
-    """Identifica uma foto vendida dentro de um pedido (a mesma foto pode sair em pedidos diferentes)."""
-    return f"{r.get('order', '')}|{r['img']}"
-
-
-def newest_rows(rows, n):
-    by_order = {}
-    for r in rows:
-        by_order.setdefault(r["order"], []).append(r)
-    out = []
-    for order in sorted(by_order, key=lambda o: int(o) if o.isdigit() else 0, reverse=True):
-        if len(out) >= n:
-            break
-        out += by_order[order]
-    return out
-
-
-def when_text(stamp):
-    """'13/10/2026 09:00' → 'hoje às 09:00' / 'ontem às 22:15' / '11/10 às 08:00'"""
-    try:
-        dt = datetime.strptime(stamp[:16], "%d/%m/%Y %H:%M")
-    except (TypeError, ValueError):
+def when_text(dt):
+    """datetime/ISO → 'hoje às 09:00' / 'ontem às 22:15' / '11/10 às 08:00'"""
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt)
+        except ValueError:
+            return None
+    if dt is None:
         return None
     days = (now().date() - dt.date()).days
     day = "hoje" if days == 0 else ("ontem" if days == 1 else dt.strftime("%d/%m"))
     return f"{day} às {dt.strftime('%H:%M')}"
 
 
-def notify_orders(tg, s, fresh, d_rev, info=None):
-    """Uma mensagem por pedido novo, com as fotos dele. Nada que já foi avisado é reenviado."""
-    if not fresh:
-        tg.send(f"💰 <b>Venda nova!</b> {e(s['name'])}\n+{brl(d_rev)}\n"
-                f"Total no evento: <b>{brl(s['revenue'])}</b> ({s['photos']} fotos)")
-        return
-    orders = {}
-    for r in fresh:
-        orders.setdefault(r["order"] or "?", []).append(r)
-    total_line = f"Total no evento: <b>{brl(s['revenue'])}</b> ({s['photos']} fotos)"
-    for i, (order, items) in enumerate(sorted(orders.items())):
-        kinds = {}
-        for r in items:
-            k = (r.get("res") or "Foto").split()[0]
-            kinds[k] = kinds.get(k, 0) + 1
-        mix = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items(), key=lambda x: -x[1]))
-        hours = sorted({r["hour"][:5] for r in items if r.get("hour")})
-        n = len(items)
-        meta = (info or {}).get(order, {})
-        cap = [f"🛒 <b>Pedido {e(order)}</b> · {n} foto{'s' if n > 1 else ''}",
-               f"{e(s['name'])}"]
-        sold_at = when_text(meta.get("time"))
-        if sold_at:
-            cap.append(f"⏰ Vendido {sold_at}")
-        cap.append(f"📸 {mix}" + (f" · cliente pagou {brl(meta['total'])}" if meta.get("total") else ""))
-        if hours:
-            cap.append("📷 Foto tirada às " + ", ".join(hours[:10]))
-        if len(orders) == 1:
-            cap.append(f"💵 Sua parte: +{brl(d_rev)}")
-        if i == len(orders) - 1:
-            if len(orders) > 1:
-                cap.append(f"💵 {len(orders)} pedidos, sua parte: +{brl(d_rev)}")
-            cap.append(total_line)
-        imgs = [r["img"] for r in items]
-        for j in range(0, len(imgs), 10):  # Telegram aceita até 10 fotos por álbum
-            tg.photos(imgs[j:j + 10], "\n".join(cap) if j == 0 else f"Pedido {e(order)} (continuação)")
+def media_items(client, rows):
+    """Baixa os arquivos vendidos (sem marca d'água); se não der, usa a miniatura pública."""
+    out = []
+    for r in rows:
+        data = client.download(r["view"]) if r.get("view") else None
+        out.append({"data": data, "url": r.get("img"), "video": r.get("video")})
+    return out
+
+
+def day_stats(items, day):
+    xs = [i for i in items if (i.get("paid_at") or "")[:10] == day]
+    return sum(i["commission"] for i in xs), len(xs), len({i["order"] for i in xs})
+
+
+def plural(n, one, many):
+    return f"{n} {one if n == 1 else many}"
+
+
+def notify_order(client, tg, order, its, s, cid, avg_cache, day=None):
+    """Um aviso por pedido: fotos sem marca d'água + tudo que dá pra saber da venda."""
+    found = {}
+    if cid:
+        try:
+            found = sales_mod.find_sold(client, cid, [i["code"] for i in its])
+        except Exception as ex:
+            print("fotos do pedido indisponíveis:", type(ex).__name__)
+    rows = [found.get(i["code"]) or {"code": i["code"], "res": i["res"]} for i in its]
+    kinds = Counter((i["res"] or "Foto").split()[0] for i in its)
+    mix = ", ".join(f"{n} {k}" for k, n in kinds.most_common())
+    mine = sum(i["commission"] for i in its)
+    try:
+        total = sales_mod.fetch_order_total(client, order)
+    except Exception:
+        total = None
+    hours = sorted({r["hour"][:5] for r in rows if r.get("hour")})
+
+    cap = [f"💰 <b>Venda nova!</b> {e(s['name']) if s else 'evento ' + e(cid or '?')}",
+           f"🛒 Pedido {e(order)} · {plural(len(its), 'foto', 'fotos')} ({e(mix)})"]
+    sold_at = when_text(its[0].get("paid_at"))
+    if sold_at:
+        cap.append(f"⏰ Pago {sold_at}" + (f" · {e(its[0]['payment'])}" if its[0].get("payment") else ""))
+    cap.append(f"💵 Sua parte: <b>+{brl(mine)}</b>" + (f" · cliente pagou {brl(total)}" if total else ""))
+    if hours:
+        cap.append(("📷 Tirada às " if len(hours) == 1 else "📷 Tiradas às ") + ", ".join(hours[:10]))
+    if s:
+        cap.append(f"📈 No evento: <b>{brl(s['revenue'])}</b> · {s['photos']} fotos"
+                   + (f" · {s['videos']} vídeos" if s.get("videos") else "")
+                   + (f" · {s['orders']} pedidos" if s.get("orders") else ""))
+        if cid not in avg_cache:
+            try:
+                avg_cache[cid] = sales_mod.fetch_average(client, cid)[0]
+            except Exception:
+                avg_cache[cid] = None
+        avg = avg_cache[cid]
+        if avg:
+            cap.append(f"👥 Média dos fotógrafos: {brl(avg)} (você {s['revenue'] / avg:.1f}x)")
+    if day:
+        cap.append(f"📅 Hoje: <b>{brl(day[0])}</b> em {plural(day[1], 'foto', 'fotos')} ({plural(day[2], 'pedido', 'pedidos')})")
+    caption = "\n".join(cap)
+
+    media = media_items(client, [r for r in rows if r.get("view") or r.get("img")])
+    if not media:
+        tg.send(caption)
+    for j in range(0, len(media), 10):  # Telegram aceita até 10 por álbum
+        tg.album(media[j:j + 10], caption if j == 0 else f"Pedido {e(order)} (continuação)")
+
 
 def recent_ids(sales, days=45):
     cutoff = date.today() - timedelta(days=days)
@@ -314,56 +344,46 @@ def recent_ids(sales, days=45):
 
 
 def job_sales(client, tg, state):
-    current = sales_mod.fetch_sales(client)
-    prev = state.get("sales")
-    codes = state.setdefault("sold_codes", {})
+    """Checa "Pedidos confirmados" (uma foto por linha, da mais nova pra mais antiga) e avisa cada
+    pedido novo uma vez só. Retorna quantos pedidos foram avisados."""
+    for old in ("sold_codes", "sales_retry"):  # memória do painel antigo
+        state.pop(old, None)
+    seen = state.get("seen_sales")
+    today = now().date().isoformat()
+    items = sales_mod.fetch_confirmed(client, set(seen or []), today=today)
 
-    if prev is None:  # primeira execução: só grava a base
-        for cid in recent_ids(current):
-            codes[cid] = [row_key(r) for r in sales_mod.fetch_sold_images(client, cid)]
+    if seen is None:  # primeira execução: só grava a base
+        current = sales_mod.fetch_sales(client)
         state["sales"] = current
-        total = sum(s["revenue"] for s in current.values())
-        tg.send(f"💰 Monitor de vendas ligado. Ano até agora: <b>{brl(total)}</b> em "
-                f"{sum(s['photos'] for s in current.values())} fotos. Vou te avisar a cada venda nova.")
-        return
+        state["seen_sales"] = [i["key"] for i in items]
+        year = [v for v in current.values() if v["date"].endswith(str(now().year))]
+        rev, n, orders = day_stats(items, today)
+        tg.send(f"💰 Monitor de vendas ligado. Ano até agora: <b>{brl(sum(v['revenue'] for v in year))}</b> em "
+                f"{sum(v['photos'] for v in year)} fotos.\nHoje: <b>{brl(rev)}</b> em {plural(n, 'foto', 'fotos')}.\n"
+                "Vou te avisar a cada venda nova, com as fotos sem marca d'água.")
+        return 0
 
-    for cid, s in list(current.items()):
-        old = prev.get(cid, {"revenue": 0, "photos": 0})
-        d_photos = s["photos"] - old["photos"]
-        d_rev = s["revenue"] - old["revenue"]
-        if d_photos <= 0 and d_rev <= 0.009:
-            continue
-        rows = sales_mod.fetch_sold_images(client, cid)
-        if cid in codes:
-            known = set(codes[cid])
-            fresh = [r for r in rows if row_key(r) not in known and r["img"] not in known]
-        else:
-            # evento sem histórico salvo: os pedidos mais novos têm número maior
-            fresh = newest_rows(rows, d_photos)
-        retry = state.setdefault("sales_retry", {})
-        if not fresh and retry.get(cid, 0) < 3:
-            # total subiu mas a lista de fotos ainda não: tenta de novo na próxima checagem
-            retry[cid] = retry.get(cid, 0) + 1
-            current[cid] = dict(prev.get(cid, {"revenue": 0, "photos": 0}), **{k: s[k] for k in ("id", "name", "date")})
-            continue
-        retry.pop(cid, None)
-        codes[cid] = sorted({row_key(r) for r in rows} | set(codes.get(cid, [])))
-        info = {}
-        if fresh:
-            try:
-                times = sales_mod.fetch_order_times(client, now())
-                for o in {r["order"] for r in fresh if r["order"]}:
-                    info[o] = {"time": times.get(o), "total": sales_mod.fetch_order_total(client, o)}
-            except Exception as ex:
-                print("detalhes do pedido indisponíveis:", type(ex).__name__)
-        notify_orders(tg, s, fresh, d_rev, info)
-
+    known = set(seen)
+    fresh = [i for i in items if i["key"] not in known]
+    if not fresh:
+        return 0
+    current = sales_mod.fetch_sales(client)
     state["sales"] = current
-    # não deixa o estado crescer pra sempre
-    keep = set(recent_ids(current, 60))
-    for cid in list(codes):
-        if cid not in keep:
-            del codes[cid]
+    orders = {}
+    for i in fresh:
+        orders.setdefault(i["order"], []).append(i)
+    day = day_stats(items, today)
+    avg_cache = {}
+    ordered = sorted(orders, key=lambda o: (orders[o][0].get("paid_at") or "", o))
+    for n, order in enumerate(ordered):
+        its = orders[order]
+        cid = sales_mod.comp_of(its[0]["code"], current)
+        try:
+            notify_order(client, tg, order, its, current.get(cid), cid, avg_cache,
+                         day if n == len(ordered) - 1 else None)
+        finally:  # avisado (ou falhou de vez): não repete
+            state["seen_sales"] = ([i["key"] for i in its] + state["seen_sales"])[:5000]
+    return len(orders)
 
 
 # ============================================================ RELATÓRIOS
@@ -372,11 +392,15 @@ def bar(n, mx, width=12):
     return "▇" * max(1 if n else 0, round(n / mx * width)) if mx else ""
 
 
+def sold_key(r):
+    return f"{r.get('order', '')}|{r.get('code', '')}"
+
+
 def focus_block(client, cid, label, since_codes):
     rows = sales_mod.fetch_sold_images(client, cid)
     avg_rev, avg_photos = sales_mod.fetch_average(client, cid)
     types = sales_mod.fetch_image_types(client, cid)
-    fresh = [r for r in rows if r["img"] not in since_codes] if since_codes is not None else []
+    fresh = [r for r in rows if sold_key(r) not in since_codes] if since_codes is not None else []
     ppo, _ = sales_mod.photos_per_order(rows)
     total_qty = sum(t["qty"] for t in types.values()) or len(rows)
     lines = [f"🎯 <b>{e(label)}</b>"]
@@ -401,8 +425,11 @@ def focus_block(client, cid, label, since_codes):
 
 
 def job_report(client, tg, state, save=True):
-    current = state.get("sales") or sales_mod.fetch_sales(client)
+    current = sales_mod.fetch_sales(client)
+    state["sales"] = current
     snap = state.get("report_snapshot", {})
+    if not snap.get("events"):
+        snap = {}
     today = now().date()
     title = f"Relatório de {today.strftime('%d/%m')}" if save else f"Relatório agora ({now().strftime('%H:%M')})"
     lines = [f"📊 <b>{title}</b>"]
@@ -422,7 +449,7 @@ def job_report(client, tg, state, save=True):
 
     month = today.strftime("/%m/%Y")
     m_rev = sum(s["revenue"] for s in current.values() if s["date"].endswith(month))
-    y_rev = sum(s["revenue"] for s in current.values())
+    y_rev = sum(s["revenue"] for s in current.values() if s["date"].endswith(str(today.year)))
     lines.append(f"\nEventos deste mês: {brl(m_rev)} · Ano: <b>{brl(y_rev)}</b>")
     tg.send("\n".join(lines))
 
@@ -433,9 +460,9 @@ def job_report(client, tg, state, save=True):
         txt, fresh, rows = focus_block(client, cid, label, set(focus_codes[cid]) if cid in focus_codes else None)
         tg.send(txt)
         if fresh:
-            tg.photos([r["img"] for r in fresh[:10]], f"📸 Fotos que venderam desde o último relatório ({len(fresh)})")
+            tg.album(media_items(client, fresh[-10:]), f"📸 Fotos que venderam desde o último relatório ({len(fresh)})")
         if save:
-            focus_codes[cid] = [r["img"] for r in rows]
+            focus_codes[cid] = [sold_key(r) for r in rows]
 
     if not save:
         return
@@ -444,7 +471,8 @@ def job_report(client, tg, state, save=True):
 
 
 def job_weekly(client, tg, state, save=True):
-    current = state.get("sales") or sales_mod.fetch_sales(client)
+    current = sales_mod.fetch_sales(client)
+    state["sales"] = current
     snap = state.get("weekly_snapshot", {}).get("events", {})
     rows = []
     for cid, s in current.items():
@@ -511,14 +539,18 @@ def handle_command(text, client, tg, state):
         job_sales(client, tg, state)
         job_report(client, tg, state, save=False)
     elif word.startswith("venda"):
-        before = dict(state.get("sales") or {})
-        job_sales(client, tg, state)
-        if before == state.get("sales"):
-            snap = state.get("report_snapshot", {}).get("events", {})
-            cur = state.get("sales", {})
-            dr = sum(v["revenue"] - snap.get(k, {"revenue": 0})["revenue"] for k, v in cur.items()) if snap else 0
-            dp = sum(v["photos"] - snap.get(k, {"photos": 0})["photos"] for k, v in cur.items()) if snap else 0
-            tg.send(f"Nenhuma venda nova desde a última checagem. Desde o relatório das 9h: <b>{brl(dr)}</b> em {dp} fotos.")
+        if not job_sales(client, tg, state):
+            today = now().date().isoformat()
+            items = sales_mod.fetch_confirmed(client, today=today)
+            rev, n, orders = day_stats(items, today)
+            msg = (f"Nenhuma venda nova desde a última checagem.\n📅 Hoje: <b>{brl(rev)}</b> em "
+                   f"{plural(n, 'foto', 'fotos')} ({plural(orders, 'pedido', 'pedidos')})")
+            if items:
+                last = items[0]
+                cid = sales_mod.comp_of(last["code"], state.get("sales") or {})
+                name = (state.get("sales") or {}).get(cid, {}).get("name", "")
+                msg += f"\n🕐 Última venda: {when_text(last['paid_at'])}" + (f" · {e(name)}" if name else "")
+            tg.send(msg)
     elif word.startswith("agenda"):
         tg.send(fmt_agenda(get_agenda(client, state)))
     elif word.startswith("evento"):
@@ -554,7 +586,7 @@ def job_auto(client, tg, state, commands=True):
     t = now()
     done = state.setdefault("done", {})
     today = t.date().isoformat()
-    errors = []
+    errors, error_types = [], []
     if commands:
         process_commands(client, tg, state)
 
@@ -566,11 +598,13 @@ def job_auto(client, tg, state, commands=True):
             done[key] = True
         except Exception as ex:  # um job com erro não derruba os outros
             errors.append(f"{key}: {ex}")
+            error_types.append(f"{key.split('-')[0]}: {type(ex).__name__}")
 
     try:
         job_sales(client, tg, state)
     except Exception as ex:
         errors.append(f"vendas: {ex}")
+        error_types.append(f"vendas: {type(ex).__name__}")
 
     due = [h for h in config.EVENT_CHECK_HOURS if t.hour >= h]
     if due:  # só a checagem mais recente (se o bot reiniciar às 15h, não roda 7h..15h em sequência)
@@ -594,7 +628,7 @@ def job_auto(client, tg, state, commands=True):
         state["error_streak"] = n
         if n in (3, 12):  # avisa se persistir, sem spam
             tg.send("⚠️ O bot está com erro nas últimas execuções:\n<code>" + e("\n".join(errors))[:1500] + "</code>")
-        print("ERROS:", len(errors), "tarefa(s) com erro (detalhes vão pro Telegram)")
+        print("ERROS:", ", ".join(error_types), "(detalhes vão pro Telegram)")
     else:
         state["error_streak"] = 0
 
@@ -608,7 +642,15 @@ def main():
         if cmd == "test":
             client.login()
             s = sales_mod.fetch_sales(client)
-            print(f"✅ Login OK. Relatório de vendas lido ({len(s)} eventos).")
+            print(f"✅ Login OK. Vendas por evento lidas ({len(s)} eventos).")
+            items = sales_mod.fetch_confirmed(client)
+            print(f"✅ Pedidos confirmados: {len(items)} fotos na 1ª página")
+            if items:
+                cid = sales_mod.comp_of(items[0]["code"], s)
+                found = sales_mod.find_sold(client, cid, [items[0]["code"]]) if cid else {}
+                r = next(iter(found.values()), None)
+                data = client.download(r["view"]) if r and r.get("view") else None
+                print(f"✅ Foto vendida sem marca d'água: {len(data) // 1024} KB" if data else "⚠️ Não baixei a foto sem marca")
             evs = ev_mod.parse_future(client.get("/competition/future"))
             print(f"✅ Página de eventos OK: {len(evs)} eventos na primeira página")
             return

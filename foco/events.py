@@ -131,6 +131,10 @@ def parse_future(html):
             "price_premium": _grab(mt, "Premium:"),
             "price_high": _grab(mt, "Alta:"),
             "price_video": _grab(mt, "Vídeo:"),
+            "price_medium": _grab(mt, "Média:"),
+            "price_low": _grab(mt, "Baixa:"),
+            "credits": _grab(mt, "Créditos:"),
+            "identification": _grab(mt, "Identificação dos Atletas:", lambda v: v.strip()),
             "organizer": _grab(mt, "Organizador:", lambda v: v.strip()),
             "launch": _grab(mt, "Lançamento:", lambda v: v.strip()),
         }
@@ -168,6 +172,8 @@ def fetch_all(client, days_ahead=None):
             if not has_next_page(html, page):
                 break
             page += 1
+    if not out:
+        raise RuntimeError("A lista de eventos veio vazia (o painel mudou?)")
     return list(out.values())
 
 
