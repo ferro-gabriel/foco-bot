@@ -343,46 +343,67 @@ def recent_ids(sales, days=45):
     return out
 
 
+MAX_ORDER_ALERTS = 8  # mais que isso numa checagem só: um resumo, nunca uma enxurrada
+
+
 def job_sales(client, tg, state):
     """Checa "Pedidos confirmados" (uma foto por linha, da mais nova pra mais antiga) e avisa cada
-    pedido novo uma vez só. Retorna quantos pedidos foram avisados."""
+    pedido novo uma vez só. Só conta como nova a venda paga depois da última checagem
+    (`sales_mark`), então histórico antigo nunca vira aviso. Retorna quantos pedidos foram avisados."""
     for old in ("sold_codes", "sales_retry"):  # memória do painel antigo
         state.pop(old, None)
-    seen = state.get("seen_sales")
-    today = now().date().isoformat()
-    items = sales_mod.fetch_confirmed(client, set(seen or []), today=today)
-
-    if seen is None:  # primeira execução: só grava a base
+    t = now()
+    today = t.date().isoformat()
+    mark = state.get("sales_mark")
+    if mark is None and state.get("seen_sales"):  # memória da versão anterior: começa daqui, em silêncio
+        state["sales_mark"] = t.isoformat()
+        return 0
+    if mark is None:  # primeira execução: só grava a base
+        items = sales_mod.fetch_confirmed(client, older_than=today)
         current = sales_mod.fetch_sales(client)
         state["sales"] = current
-        state["seen_sales"] = [i["key"] for i in items]
-        year = [v for v in current.values() if v["date"].endswith(str(now().year))]
+        state["sales_mark"] = max([i["paid_at"] for i in items if i["paid_at"]] + [t.isoformat()])
+        state["seen_sales"] = [i["key"] for i in items][:2000]
+        year = [v for v in current.values() if v["date"].endswith(str(t.year))]
         rev, n, orders = day_stats(items, today)
         tg.send(f"💰 Monitor de vendas ligado. Ano até agora: <b>{brl(sum(v['revenue'] for v in year))}</b> em "
                 f"{sum(v['photos'] for v in year)} fotos.\nHoje: <b>{brl(rev)}</b> em {plural(n, 'foto', 'fotos')}.\n"
                 "Vou te avisar a cada venda nova, com as fotos sem marca d'água.")
         return 0
 
-    known = set(seen)
-    fresh = [i for i in items if i["key"] not in known]
+    # margem de 2h para pagamento confirmado com atraso (ex.: boleto)
+    floor = (datetime.fromisoformat(mark) - timedelta(hours=2)).isoformat()
+    items = sales_mod.fetch_confirmed(client, older_than=min(floor, today))
+    known = set(state.get("seen_sales") or [])
+    fresh = [i for i in items if i["key"] not in known and (i["paid_at"] or "") > floor]
     if not fresh:
         return 0
+    state["sales_mark"] = max([mark] + [i["paid_at"] for i in fresh])
+    state["seen_sales"] = ([i["key"] for i in fresh] + state.get("seen_sales", []))[:2000]
+
     current = sales_mod.fetch_sales(client)
     state["sales"] = current
     orders = {}
     for i in fresh:
         orders.setdefault(i["order"], []).append(i)
     day = day_stats(items, today)
-    avg_cache = {}
     ordered = sorted(orders, key=lambda o: (orders[o][0].get("paid_at") or "", o))
+
+    if len(ordered) > MAX_ORDER_ALERTS:  # algo fora do normal: um resumo só
+        tg.send(f"💰 <b>{len(ordered)} pedidos novos</b> ({plural(len(fresh), 'foto', 'fotos')}): "
+                f"<b>+{brl(sum(i['commission'] for i in fresh))}</b>\n"
+                f"📅 Hoje: <b>{brl(day[0])}</b> em {plural(day[1], 'foto', 'fotos')}")
+        return len(ordered)
+
+    avg_cache = {}
     for n, order in enumerate(ordered):
         its = orders[order]
         cid = sales_mod.comp_of(its[0]["code"], current)
         try:
             notify_order(client, tg, order, its, current.get(cid), cid, avg_cache,
                          day if n == len(ordered) - 1 else None)
-        finally:  # avisado (ou falhou de vez): não repete
-            state["seen_sales"] = ([i["key"] for i in its] + state["seen_sales"])[:5000]
+        except Exception as ex:  # um pedido com problema não trava os outros nem se repete
+            print("aviso de pedido falhou:", type(ex).__name__)
     return len(orders)
 
 
@@ -457,7 +478,7 @@ def job_report(client, tg, state, save=True):
     for cid, label in FOCUS_EVENTS.items():
         if cid not in current:
             continue
-        txt, fresh, rows = focus_block(client, cid, label, set(focus_codes[cid]) if cid in focus_codes else None)
+        txt, fresh, rows = focus_block(client, cid, label, set(focus_codes[cid]) if focus_codes.get(cid) else None)
         tg.send(txt)
         if fresh:
             tg.album(media_items(client, fresh[-10:]), f"📸 Fotos que venderam desde o último relatório ({len(fresh)})")
@@ -541,7 +562,7 @@ def handle_command(text, client, tg, state):
     elif word.startswith("venda"):
         if not job_sales(client, tg, state):
             today = now().date().isoformat()
-            items = sales_mod.fetch_confirmed(client, today=today)
+            items = sales_mod.fetch_confirmed(client, older_than=today)
             rev, n, orders = day_stats(items, today)
             msg = (f"Nenhuma venda nova desde a última checagem.\n📅 Hoje: <b>{brl(rev)}</b> em "
                    f"{plural(n, 'foto', 'fotos')} ({plural(orders, 'pedido', 'pedidos')})")

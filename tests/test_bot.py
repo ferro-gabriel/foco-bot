@@ -129,7 +129,10 @@ class FakeClient:
         if path == "/next-api/accounting/orders-by-competition-by-user":
             return self.sales
         if path == "/next-api/accounting/confirmed-orders":
-            return {"items": self.confirmed, "_meta": {"pageCount": 1}}
+            page, per = params.get("page", 1), 50
+            self.pages_read = max(getattr(self, "pages_read", 0), page)
+            return {"items": self.confirmed[(page - 1) * per:page * per],
+                    "_meta": {"pageCount": max(1, -(-len(self.confirmed) // per))}}
         if path == "/next-api/report/sold-images":
             items = SOLD_ITEMS if params["type"] == "photo" else []
             return {"type": params["type"], "items": items, "pagination": {"pageCount": 1}}
@@ -197,16 +200,21 @@ class FlowTests(unittest.TestCase):
         main.job_sales(c, tg, state)                            # base
         self.assertIn("Monitor de vendas ligado", sent[-1])
         c.sales = sales_json(1520.0, 207)
-        c.confirmed = [confirmed(None, 11055904, "RRLL2699443", "2026-10-13 01:15:00"),
-                       confirmed(None, 11055461, "RRLL2699441", "2026-10-13 00:00:00"),
-                       confirmed(None, 11055461, "RRLL2699442", "2026-10-13 00:00:00", "Alta 3450 Pixels", 5.0)] + c.confirmed
+        from datetime import datetime, timedelta
+        t1 = datetime.utcnow() + timedelta(minutes=1)
+        t2 = t1 + timedelta(minutes=2)
+        f = lambda dt: dt.strftime("%Y-%m-%d %H:%M:%S")
+        c.confirmed = [confirmed(None, 11055904, "RRLL2699443", f(t2)),
+                       confirmed(None, 11055461, "RRLL2699441", f(t1)),
+                       confirmed(None, 11055461, "RRLL2699442", f(t1), "Alta 3450 Pixels", 5.0)] + c.confirmed
+        local = (t1 - timedelta(hours=3)).strftime("%H:%M")
         n = len(sent)
         main.job_sales(c, tg, state)
         albums = [x for x in sent[n:] if x[0] == "album"]
         self.assertEqual(len(albums), 2)                       # um aviso por pedido
         self.assertIn("Pedido 11055461", albums[0][2])
         self.assertIn("1 Premium, 1 Alta", albums[0][2])
-        self.assertIn("Pago 12/10 às 21:00 · Pix", albums[0][2])
+        self.assertIn(f"às {local} · Pix", albums[0][2])
         self.assertIn("Sua parte: <b>+R$ 12,40</b>", albums[0][2])
         self.assertIn("cliente pagou R$ 19,90", albums[0][2])
         self.assertIn("VILA GERMÂNICA", albums[0][2])
@@ -244,6 +252,50 @@ class FlowTests(unittest.TestCase):
         state["agenda"] = {"300001": {"mine": "espera", "title": "CORRIDA DO CORAÇÃO", "date": "2026-10-17"}}
         main.check_agenda_changes(main.get_agenda(c, state), tg, state)
         self.assertIn("Você foi aprovado", sent[-1])
+
+    def test_history_never_becomes_alert(self):
+        """Regressão: histórico em várias páginas não pode virar enxurrada de 'venda nova'."""
+        import main
+        from datetime import datetime, timedelta
+        from foco.telegram import Telegram
+        state, sent = {}, []
+        tg = Telegram(state)
+        tg.send = lambda t: sent.append(t)
+        tg.album = lambda items, cap=None: sent.append(("album", cap))
+        c = FakeClient()
+        base = datetime.utcnow() - timedelta(hours=1)
+        stamp = lambda dt: dt.strftime("%Y-%m-%d %H:%M:%S")
+        # 300 fotos antigas (6 páginas), a mais nova há 1h
+        c.confirmed = [confirmed(None, 11000000 - k, f"RRLL269944{k:05d}", stamp(base - timedelta(minutes=10 * k)))
+                       for k in range(300)]
+        main.job_sales(c, tg, state)
+        self.assertEqual(len(sent), 1)                       # só "monitor ligado"
+        for _ in range(3):
+            self.assertEqual(main.job_sales(c, tg, state), 0)
+        self.assertEqual(len(sent), 1)
+        # entra 1 venda nova: 1 aviso
+        c.confirmed.insert(0, confirmed(None, 11999999, "RRLL2699443", stamp(datetime.utcnow())))
+        self.assertEqual(main.job_sales(c, tg, state), 1)
+        self.assertEqual(len(sent), 2)
+        self.assertIn("Pedido 11999999", sent[-1][1])
+        # muitas de uma vez: um resumo só
+        c.confirmed[:0] = [confirmed(None, 12000000 + k, f"RRLL269944X{k}", stamp(datetime.utcnow())) for k in range(20)]
+        main.job_sales(c, tg, state)
+        self.assertEqual(len(sent), 3)
+        self.assertIn("20 pedidos novos", sent[-1])
+
+    def test_old_memory_starts_silently(self):
+        import main
+        from foco.telegram import Telegram
+        state, sent = {"seen_sales": ["1|x"]}, []
+        tg = Telegram(state)
+        tg.send = lambda t: sent.append(t)
+        tg.album = lambda items, cap=None: sent.append(cap)
+        c = FakeClient()
+        c.confirmed = [confirmed(None, 5, "RRLL2699445", "2026-01-01 10:00:00")]
+        self.assertEqual(main.job_sales(c, tg, state), 0)
+        self.assertEqual(main.job_sales(c, tg, state), 0)
+        self.assertEqual(sent, [])
 
     def test_conflict(self):
         import main

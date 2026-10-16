@@ -176,22 +176,18 @@ def parse_confirmed(j):
     return out
 
 
-def fetch_confirmed(client, known=None, today=None, max_pages=10):
-    """Fotos vendidas, da mais nova pra mais antiga (50 por página). Para quando já passou
-    por vendas conhecidas e (se `today` for dado) já cobriu todas as vendas de hoje."""
-    known = known or set()
+def fetch_confirmed(client, older_than=None, max_pages=10):
+    """Fotos vendidas, da mais nova pra mais antiga (50 por página).
+    Lê páginas até chegar em vendas pagas antes de `older_than` (ISO, horário de Brasília);
+    sem `older_than`, lê só a 1ª página."""
     out = []
     for page in range(1, max_pages + 1):
         j = client.get_json("/next-api/accounting/confirmed-orders", {"page": page, "per-page": 50})
         items = parse_confirmed(j)
         out += items
-        if not items or page >= _pages(j):
+        if not items or page >= _pages(j) or not older_than:
             break
-        hit_known = any(i["key"] in known for i in items)
-        oldest = min((i["paid_at"] or "") for i in items)[:10]
-        if page >= 2 and hit_known and (not today or oldest < today):
-            break
-        if not known and (not today or oldest < today):
+        if min((i["paid_at"] or "") for i in items) < older_than:
             break
     return out
 
