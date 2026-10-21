@@ -10,6 +10,7 @@ Uso:
   python main.py test       # testa login e mostra um resumo, sem mandar nada
 """
 import html
+import re
 import sys
 from collections import Counter
 from datetime import date, datetime, timedelta
@@ -669,10 +670,21 @@ def main():
             print(f"✅ Pedidos confirmados: {len(items)} fotos na 1ª página")
             if items:
                 cid = sales_mod.comp_of(items[0]["code"], s)
+                if cid:  # estrutura da API de fotos vendidas (só nomes de campos e formato dos links)
+                    j = sales_mod._sold_page(client, cid, "photo", 1)
+                    print("🔎 sold-images chaves:", sorted(j))
+                    for it in (j.get("items") or [])[:1]:
+                        for k, v in sorted(it.items()):
+                            v = re.sub(r"\d", "9", str(v))[:120] if isinstance(v, str) and ("/" in v or "http" in v) else type(v).__name__
+                            print(f"   {k}: {v}")
                 found = sales_mod.find_sold(client, cid, [items[0]["code"]]) if cid else {}
                 r = next(iter(found.values()), None)
                 data = client.download(r["view"]) if r and r.get("view") else None
                 print(f"✅ Foto vendida sem marca d'água: {len(data) // 1024} KB" if data else "⚠️ Não baixei a foto sem marca")
+                for k in ("view", "img"):
+                    if r and r.get(k):
+                        x = client.s.get(r[k] if r[k].startswith("http") else "https://www.focomarket.com.br" + r[k], timeout=60)
+                        print(f"   {k}: HTTP {x.status_code} {x.headers.get('content-type')} {len(x.content) // 1024} KB → {re.sub(r'[0-9]', '9', x.url)[:120]}")
             evs = ev_mod.parse_future(client.get("/competition/future"))
             print(f"✅ Página de eventos OK: {len(evs)} eventos na primeira página")
             return
