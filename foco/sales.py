@@ -109,7 +109,8 @@ def _sold_page(client, comp_id, kind, page):
 
 
 def fetch_sold_images(client, comp_id, kinds=("photo", "video"), max_pages=80):
-    """Todas as fotos (e vídeos) vendidas no evento. A API devolve 10 por página."""
+    """Todas as fotos (e vídeos) vendidas no evento, do pedido mais antigo pro mais novo.
+    A API devolve 10 por página; a ordem dela já mudou, então ordenamos pelo número do pedido."""
     rows = []
     for kind in kinds:
         page = 1
@@ -119,23 +120,33 @@ def fetch_sold_images(client, comp_id, kinds=("photo", "video"), max_pages=80):
             if page >= _pages(j):
                 break
             page += 1
-    return rows
+    return sorted(rows, key=lambda r: _int(r["order"]))
 
 
-def find_sold(client, comp_id, codes, max_pages=8):
-    """Acha fotos vendidas pelo código. A lista vem do pedido mais antigo pro mais novo,
-    então procura de trás pra frente (as vendas novas estão nas últimas páginas)."""
+def _ends_first(last, max_pages):
+    """1, last, 2, last-1, ...: as vendas novas ficam numa das pontas da lista
+    (no fim até out/2026, na 1ª página depois disso)."""
+    lo, hi, out = 1, last, []
+    while lo <= hi and len(out) < max_pages:
+        out.append(lo)
+        if hi != lo and len(out) < max_pages:
+            out.append(hi)
+        lo, hi = lo + 1, hi - 1
+    return out
+
+
+def find_sold(client, comp_id, codes, max_pages=16):
+    """Acha fotos vendidas pelo código, procurando pelas duas pontas da lista."""
     want, found = set(codes), {}
     for kind in ("photo", "video"):
         first = _sold_page(client, comp_id, kind, 1)
-        last = _pages(first)
-        p = last
-        while want - set(found) and p >= 1 and last - p < max_pages:
+        for p in _ends_first(_pages(first), max_pages):
+            if not want - set(found):
+                break
             j = first if p == 1 else _sold_page(client, comp_id, kind, p)
             for r in parse_sold_json(j):
                 if r["code"] in want:
                     found.setdefault(r["code"], r)
-            p -= 1
         if not want - set(found):
             break
     return found

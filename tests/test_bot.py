@@ -56,7 +56,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(a["commission"], 90)
         self.assertEqual(a["price_premium"], 19.90)
         self.assertEqual(a["partnership"], "oficial")
-        self.assertEqual(a["date"], "2026-10-17")
+        self.assertEqual(a["date"], "2030-10-17")
         b = evs["275615"]
         self.assertEqual(b["status"], "espera_encerrada")  # texto do modal não confunde
         self.assertEqual(b["waitlist"], 18)
@@ -101,6 +101,22 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(sales.hour_histogram(rows)[20], 2)
         ppo, _ = sales.photos_per_order(rows)
         self.assertAlmostEqual(ppo, 1.5)
+
+    def test_find_sold_either_order(self):
+        """A lista de fotos vendidas já veio do mais antigo pro mais novo e depois o contrário (out/2026)."""
+        items = [sold_item(11000000 + i, f"RRLL269944{i:03d}") for i in range(590)]
+        for newest_first in (False, True):
+            xs = items[::-1] if newest_first else items
+
+            class C:
+                def get_json(self, path, params=None):
+                    p = params["page-photo"]
+                    return {"type": params["type"], "items": xs[(p - 1) * 10:p * 10] if params["type"] == "photo" else [],
+                            "pagination": {"pageCount": 59}}
+            found = sales.find_sold(C(), "269944", ["RRLL269944589"])
+            self.assertIn("RRLL269944589", found, newest_first)
+            rows = sales.fetch_sold_images(C(), "269944")
+            self.assertEqual(rows[-1]["code"], "RRLL269944589")
 
 
 
@@ -156,11 +172,11 @@ class FakeClient:
         if path == "/competition/schedule":
             if not self.agenda_on:
                 return "<html></html>"
-            return '<div class="time-frame" data-time-frame-index="2026-10-17" data-total-competitions="1"></div>' \
+            return '<div class="time-frame" data-time-frame-index="2030-10-17" data-total-competitions="1"></div>' \
                    '<div class="time-frame" data-time-frame-index="2026-10-18" data-total-competitions="0"></div>' \
                    '<div class="time-frame" data-time-frame-index="2020-01-01" data-total-competitions="3"></div>'
         if path == "/competition/load-competitions-by-date":
-            assert params["date"] == "2026-10-17", params
+            assert params["date"] == "2030-10-17", params
             parts = fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')
             return parts[0] + '<div class="col-md-4 col-sm-12 card-event-widget">' + parts[1]
         if path == "/accounting/get-convertion-by-competition":
@@ -249,7 +265,7 @@ class FlowTests(unittest.TestCase):
         self.assertIn("Não entendi", sent[-1])
 
         # aprovado na lista de espera
-        state["agenda"] = {"300001": {"mine": "espera", "title": "CORRIDA DO CORAÇÃO", "date": "2026-10-17"}}
+        state["agenda"] = {"300001": {"mine": "espera", "title": "CORRIDA DO CORAÇÃO", "date": "2030-10-17"}}
         main.check_agenda_changes(main.get_agenda(c, state), tg, state)
         self.assertIn("Você foi aprovado", sent[-1])
 
