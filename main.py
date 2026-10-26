@@ -122,12 +122,24 @@ def get_agenda(client, state):
     return agenda
 
 
+def add_rankings(client, agenda):
+    """Sua classificação em cada evento confirmado (o painel não mostra na lista de espera)."""
+    for a in agenda.values():
+        if a.get("mine") == "inscrito":
+            try:
+                a["rank"] = ev_mod.fetch_ranking(client, a["id"])
+            except Exception as ex:
+                print("classificação indisponível:", a["id"], ex)
+    return agenda
+
+
 def fmt_agenda(agenda):
     def line(a):
         d = datetime.fromisoformat(a["date"])
         dist = f" · 🚗 {a['km']} km" if a.get("km") is not None else ""
+        rank = f"\n      🏆 {a['rank'][0]}º de {a['rank'][1]} fotógrafos" if a.get("rank") else ""
         return (f"<b>{WEEKDAYS[d.weekday()]} {d.strftime('%d/%m/%y')}</b> · {e(a['title'].title())}\n"
-                f"      📍 {e(a['city'])}/{e(a['uf'])}{dist}")
+                f"      📍 {e(a['city'])}/{e(a['uf'])}{dist}{rank}")
 
     confirmed = sorted([a for a in agenda.values() if a["mine"] == "inscrito"], key=lambda x: x["date"])
     pending = sorted([a for a in agenda.values() if a["mine"] == "espera"], key=lambda x: x["date"])
@@ -139,6 +151,8 @@ def fmt_agenda(agenda):
         for a in confirmed:
             warn = " ⚠️ <i>2+ eventos no dia</i>" if len(per_day[a["date"]]) > 1 else ""
             lines.append("✅ " + line(a) + warn)
+        if not any(a.get("rank") for a in confirmed):
+            lines.append("⚠️ <i>Não consegui ler sua classificação nos eventos (o painel mudou?)</i>")
     else:
         lines.append("Nenhum evento confirmado daqui pra frente.")
     if pending:
@@ -529,7 +543,7 @@ def job_weekly(client, tg, state, save=True):
 HELP = """🤖 <b>Comandos</b>
 /relatorio – vendas desde o relatório das 9h + Vila
 /vendas – checa vendas novas agora
-/agenda – sua agenda confirmada + o que está aguardando aprovação
+/agenda – sua agenda confirmada (com sua classificação em cada evento) + o que está aguardando aprovação
 /eventos – melhores eventos abertos agora, comparados com sua agenda
 /semana – resumo da semana
 /ajuda – esta lista
@@ -573,7 +587,7 @@ def handle_command(text, client, tg, state):
                 msg += f"\n🕐 Última venda: {when_text(last['paid_at'])}" + (f" · {e(name)}" if name else "")
             tg.send(msg)
     elif word.startswith("agenda"):
-        tg.send(fmt_agenda(get_agenda(client, state)))
+        tg.send(fmt_agenda(add_rankings(client, get_agenda(client, state))))
     elif word.startswith("evento"):
         tg.send("🔎 Buscando eventos em SC, PR e RS… leva uns segundos.")
         job_events_now(client, tg, state)

@@ -13,7 +13,7 @@ Roda sozinho no GitHub (grátis, na nuvem), 24h por dia, e te manda no Telegram:
 ## Comandos no Telegram (resposta na hora)
 `/relatorio` · `/vendas` · `/agenda` · `/eventos` · `/semana` · `/ajuda`
 
-Os eventos recomendados já vêm comparados com a sua agenda: o que você já está inscrito ou na lista de espera não aparece de novo, e eventos no mesmo dia de um compromisso seu vêm com ⚠️. Quando você é aprovado numa lista de espera, chega 🎉.
+Os eventos recomendados já vêm comparados com a sua agenda: o que você já está inscrito ou na lista de espera não aparece de novo, e eventos no mesmo dia de um compromisso seu vêm com ⚠️. Quando você é aprovado numa lista de espera, chega 🎉. No `/agenda`, cada evento confirmado vem com a sua classificação nele (🏆 27º de 63 fotógrafos), a mesma do Painel do Evento.
 
 ## De onde vêm os dados
 O painel da Foco foi refeito em out/2026: vendas, pedidos e fotos vendidas vêm da API nova do painel (`/next-api/...`, a mesma que as telas usam); eventos e agenda continuam nas páginas antigas. Se o painel mudar de novo e uma leitura vier vazia, o bot avisa no Telegram em vez de ficar quieto.

@@ -94,6 +94,10 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(evs), 1)
         self.assertEqual((evs[0]["id"], evs[0]["city"], evs[0]["date"]), ("193965", "Blumenau", "2026-11-08"))
 
+    def test_ranking(self):
+        self.assertEqual(events.parse_ranking(RANK_HTML), (27, 63))
+        self.assertIsNone(events.parse_ranking("<div>Número de fotógrafos 63</div>"))
+
     def test_sold(self):
         rows = sales.parse_sold_json({"type": "photo", "items": SOLD_ITEMS})
         self.assertEqual([r["order"] for r in rows], ["11055461", "11055461", "11055904"])
@@ -119,6 +123,11 @@ class ParseTests(unittest.TestCase):
             self.assertEqual(rows[-1]["code"], "RRLL269944589")
 
 
+
+RANK_HTML = """<div class="info-section mb-3 d-flex flex-column justify-content-between">
+<span class="text-sm my-2"><strong>Sua classificação no evento</strong> (com base no seu ranking):</span>
+<span class="event-info-value font-medium text-sm">
+    27º de 63 fotógrafos                </span></div>"""
 
 AGENDA_DAY_HTML = """<div class="col-md-6 col-sm-12 card-event-widget"><div class="event-card-fc ">
 <div class="event-card-header-fc"><h3 class="event-title-fc">CIRCUITO ANGELONI 2026 - BLUMENAU</h3>
@@ -179,6 +188,8 @@ class FakeClient:
             assert params["date"] == "2030-10-17", params
             parts = fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')
             return parts[0] + '<div class="col-md-4 col-sm-12 card-event-widget">' + parts[1]
+        if path.startswith("/competition/information/"):
+            return RANK_HTML
         if path == "/accounting/get-convertion-by-competition":
             return "<table><tr><th>Receita Media</th><th>Media de Fotos</th></tr><tr><td>R$ 1.200,00</td><td>184,92</td></tr></table>"
         if path == "/accounting/get-image-type-by-competition":
@@ -254,6 +265,8 @@ class FlowTests(unittest.TestCase):
         main.handle_command("/agenda", c, tg, state)
         self.assertIn("Sua agenda", sent[-1])
         self.assertIn("✅", sent[-1]); self.assertIn("⏳", sent[-1])
+        self.assertIn("🏆 27º de 63 fotógrafos", sent[-1])
+        self.assertEqual(sent[-1].count("🏆"), 1)  # só no confirmado, não na lista de espera
         snap = dict(state["report_snapshot"])
         main.handle_command("relatório", c, tg, state)
         self.assertEqual(state["report_snapshot"], snap)  # sob demanda não mexe no relatório das 9h

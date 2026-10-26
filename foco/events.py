@@ -220,6 +220,21 @@ def fetch_agenda(client):
     return agenda
 
 
+RANK_RX = re.compile(r"classifica[çc][ãa]o no evento.*?(\d+)\s*[º°ª]?\s*de\s*(\d+)\s*fot", re.I | re.S)
+
+
+def parse_ranking(html):
+    """'Sua classificação no evento (com base no seu ranking): 27° de 63 fotógrafos' → (27, 63)"""
+    txt = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
+    m = RANK_RX.search(txt)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def fetch_ranking(client, comp_id):
+    """Sua classificação no evento, lida no Painel do Evento. Só aparece nos eventos em que você está inscrito."""
+    return parse_ranking(client.get(f"/competition/information/{comp_id}"))
+
+
 # ---------------------------------------------------------------- nota
 
 def sport_weight(sport, title):
