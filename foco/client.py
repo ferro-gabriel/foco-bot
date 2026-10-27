@@ -25,7 +25,8 @@ class FocoClient:
         if not self.username or not self.password:
             raise LoginError("FOCO_USER / FOCO_PASSWORD não configurados")
         r = self.s.get(BASE + "/site/login", timeout=30)
-        m = re.search(r'name="_csrf" value="([^"]+)"', r.text)
+        # página antiga (Yii) tinha o input hidden; a nova (Next.js) traz o token no JSON "dto"
+        m = re.search(r'name="_csrf" value="([^"]+)"', r.text) or re.search(r'"csrfToken":"([^"]+)"', r.text)
         if not m:
             raise LoginError("Não achei o token _csrf na página de login")
         r = self.s.post(
@@ -39,7 +40,7 @@ class FocoClient:
             timeout=30,
         )
         if "/site/login" in r.url or 'id="loginform"' in r.text:
-            if "captcha" in r.text.lower() and "loginform-captcha" in r.text:
+            if "loginform-captcha" in r.text or '"captcha":{"enabled":true' in r.text:
                 raise LoginError("O site pediu captcha. Entre uma vez pelo navegador e tente de novo mais tarde.")
             raise LoginError("Login recusado: confira usuário e senha")
         self.logged = True
