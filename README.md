@@ -7,7 +7,7 @@ Roda sozinho no GitHub (grátis, na nuvem), 24h por dia, e te manda no Telegram:
 | A cada 3 min | 💰 **Venda nova**, um aviso por pedido: fotos vendidas **sem marca d'água**, evento, Premium/Alta/vídeo, hora do pagamento, Pix/cartão, sua parte, quanto o cliente pagou, horário em que as fotos foram tiradas, total do evento × média dos fotógrafos e quanto você já vendeu hoje |
 | 7h | ☀️ Melhores eventos abertos + 🆕 eventos novos + ⏰ cadastros fechando |
 | 18h | 🆕 eventos novos, vagas que abriram, listas de espera que abriram |
-| 9h | 📊 Relatório diário + relatório detalhado da **Vila Germânica** (horários que mais vendem, Premium x Alta, você x média dos fotógrafos, fotos vendidas) |
+| 9h | 📊 Relatório diário + relatório detalhado do **evento em foco**, se houver (horários que mais vendem, Premium x Alta, você x média dos fotógrafos, fotos vendidas) |
 | Segunda 9h | 🗓 Resumo da semana + você × média dos fotógrafos em cada evento |
 
 ## Comandos no Telegram (resposta na hora)
@@ -52,4 +52,4 @@ python3 -m unittest discover tests                          # testes
 ```
 
 ## Trocar o evento em foco
-Em `main.py`, `FOCUS_EVENTS = {"269944": "Vila Germânica – Oktoberfest 2026"}`. O número é o ID do evento no painel (aparece no relatório "Vendas por Evento").
+Em `main.py`, `FOCUS_EVENTS` começa vazio (nenhum evento em foco). Para colocar um: `FOCUS_EVENTS = {"269944": "Vila Germânica – Oktoberfest 2026"}`. O número é o ID do evento no painel (aparece no relatório "Vendas por Evento").

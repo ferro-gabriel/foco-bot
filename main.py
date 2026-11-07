@@ -24,7 +24,7 @@ TZ = ZoneInfo("America/Sao_Paulo")
 WEEKDAYS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
 
 # Eventos que você está trabalhando agora: ganham relatório detalhado todo dia
-FOCUS_EVENTS = {"269944": "Vila Germânica – Oktoberfest 2026"}
+FOCUS_EVENTS = {}  # ex.: {"269944": "Vila Germânica – Oktoberfest 2026"}
 # Palavras que SEMPRE geram alerta, mesmo fora dos filtros
 WATCH_WORDS = ["oktoberfest", "vila germânica", "vila germanica", "sommerfest", "marejada", "fenarreco", "schützenfest", "fenachopp"]
 

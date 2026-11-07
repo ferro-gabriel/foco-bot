@@ -254,8 +254,15 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(main.job_sales(c, tg, state), 0)
         self.assertEqual(sent[n:], [])
 
+        # sem evento em foco, o relatório não traz bloco detalhado
+        n = len(sent)
+        main.job_report(c, tg, state, save=False)
+        self.assertFalse(any(isinstance(x, str) and "Vila Germânica –" in x for x in sent[n:]))
+        # com evento em foco, traz
+        main.FOCUS_EVENTS["269944"] = "Vila Germânica – Oktoberfest 2026"
+        self.addCleanup(main.FOCUS_EVENTS.clear)
         main.job_report(c, tg, state)
-        self.assertTrue(any(isinstance(x, str) and "Vila Germânica" in x for x in sent))
+        self.assertTrue(any(isinstance(x, str) and "Vila Germânica –" in x for x in sent[n:]))
         main.job_weekly(c, tg, state)
         self.assertIn("Resumo da semana", sent[-1])
 
