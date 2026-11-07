@@ -36,8 +36,7 @@ jobs:
 
       - name: Rodar bot
         env:
-          FOCO_USER: ${{ secrets.FOCO_USER }}
-          FOCO_PASSWORD: ${{ secrets.FOCO_PASSWORD }}
+          FOCO_COOKIE: ${{ secrets.FOCO_COOKIE }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STATE_KEY: ${{ secrets.STATE_KEY }}

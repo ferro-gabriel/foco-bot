@@ -35,8 +35,7 @@ Em **Settings → Secrets and variables → Actions → New repository secret** 
 
 | Nome | Valor |
 |---|---|
-| `FOCO_USER` | seu login do FocoMarket |
-| `FOCO_PASSWORD` | sua senha do FocoMarket |
+| `FOCO_COOKIE` | sua sessão do FocoMarket (veja "Renovar a sessão") |
 | `TELEGRAM_TOKEN` | token que o @BotFather te deu |
 | `STATE_KEY` | chave da memória criptografada (já criada; cópia local em `.env`) |
 
@@ -46,10 +45,20 @@ O chat é descoberto sozinho.
 ## Rodar no Mac (opcional)
 ```bash
 pip3 install -r requirements.txt
-FOCO_USER=... FOCO_PASSWORD=... python3 main.py test      # testa o login
-FOCO_USER=... FOCO_PASSWORD=... DRY_RUN=1 python3 main.py events   # mostra no terminal em vez do Telegram
+FOCO_COOKIE="$(pbpaste)" python3 main.py test      # testa a sessão (com o cookie copiado)
+FOCO_COOKIE="$(pbpaste)" DRY_RUN=1 python3 main.py events   # mostra no terminal em vez do Telegram
 python3 -m unittest discover tests                          # testes
 ```
+
+## Renovar a sessão
+O login da Foco exige captcha, então o bot usa a sessão que você abre no navegador. Quando ela vence, chega um aviso 🔑 no Telegram.
+1. Entre no painel da Foco no Chrome, marcando "lembrar de mim", e deixe uma página do painel aberta.
+2. Abra `Cmd+Option+I` → aba **Network**, recarregue a página e clique na primeira linha da lista.
+3. Em **Request Headers**, copie o valor inteiro de `cookie`.
+4. No terminal, dentro da pasta do projeto: `pbpaste | gh secret set FOCO_COOKIE`
+5. Rode **Actions → foco-bot → Run workflow → test**.
+
+Esse cookie dá acesso à sua conta, como uma senha: guarde só no Secret e não cole em conversas.
 
 ## Trocar o evento em foco
 Em `main.py`, `FOCUS_EVENTS` começa vazio (nenhum evento em foco). Para colocar um: `FOCUS_EVENTS = {"269944": "Vila Germânica – Oktoberfest 2026"}`. O número é o ID do evento no painel (aparece no relatório "Vendas por Evento").

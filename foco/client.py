@@ -1,11 +1,12 @@
 """Sessão autenticada no FocoMarket (painel do fotógrafo)."""
 import os
-import re
 import time
 
 import requests
 
-BASE = "https://www.focomarket.com.br"
+DOMAIN = "www.focomarket.com.br"
+BASE = "https://" + DOMAIN
+EXPIRED_MSG = "A sessão da Foco venceu: renove o FOCO_COOKIE"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 
 
@@ -13,36 +14,40 @@ class LoginError(RuntimeError):
     pass
 
 
+def parse_cookie_header(raw):
+    """'a=1; b=2' (o cabeçalho Cookie copiado do navegador) vira {'a': '1', 'b': '2'}."""
+    raw = (raw or "").strip()
+    if raw.lower().startswith("cookie:"):
+        raw = raw[len("cookie:"):]
+    pairs = (p.split("=", 1) for p in raw.split(";") if "=" in p)
+    return {k.strip(): v.strip() for k, v in pairs if k.strip()}
+
+
 class FocoClient:
-    def __init__(self, username=None, password=None):
-        self.username = username or os.environ.get("FOCO_USER", "")
-        self.password = password or os.environ.get("FOCO_PASSWORD", "")
+    """O login do site exige captcha, então o bot usa a sessão aberta por você no navegador
+    (secret FOCO_COOKIE) e nunca envia usuário e senha."""
+
+    def __init__(self, cookie=None):
         self.s = requests.Session()
         self.s.headers["User-Agent"] = UA
+        # presos ao domínio da Foco: não vão junto em requisições para outros endereços
+        for name, value in parse_cookie_header(cookie or os.environ.get("FOCO_COOKIE", "")).items():
+            self.s.cookies.set(name, value, domain=DOMAIN, path="/")
         self.logged = False
+        self.expired = False  # sessão recusada: não insiste até o cookie ser renovado
 
     def login(self):
-        if not self.username or not self.password:
-            raise LoginError("FOCO_USER / FOCO_PASSWORD não configurados")
-        r = self.s.get(BASE + "/site/login", timeout=30)
-        # página antiga (Yii) tinha o input hidden; a nova (Next.js) traz o token no JSON "dto"
-        m = re.search(r'name="_csrf" value="([^"]+)"', r.text) or re.search(r'"csrfToken":"([^"]+)"', r.text)
-        if not m:
-            raise LoginError("Não achei o token _csrf na página de login")
-        r = self.s.post(
-            BASE + "/site/login",
-            data={
-                "_csrf": m.group(1),
-                "LoginForm[username]": self.username,
-                "LoginForm[password]": self.password,
-                "LoginForm[rememberMe]": "1",
-            },
-            timeout=30,
-        )
-        if "/site/login" in r.url or 'id="loginform"' in r.text:
-            if "loginform-captcha" in r.text or '"captcha":{"enabled":true' in r.text:
-                raise LoginError("O site pediu captcha. Entre uma vez pelo navegador e tente de novo mais tarde.")
-            raise LoginError("Login recusado: confira usuário e senha")
+        """Confere se a sessão ainda vale. Falha de rede sobe como RequestException, não como sessão vencida."""
+        if self.expired:
+            raise LoginError(EXPIRED_MSG)
+        if not self.s.cookies:
+            self.expired = True
+            raise LoginError("FOCO_COOKIE não configurado")
+        r = self.s.get(BASE + "/competition/future", timeout=30)
+        if "/site/login" in r.url or "/code-access" in r.url:
+            self.expired = True
+            raise LoginError(EXPIRED_MSG)
+        r.raise_for_status()
         self.logged = True
 
     def get(self, path, params=None, retries=2):

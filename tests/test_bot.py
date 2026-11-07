@@ -149,6 +149,8 @@ class FakeClient:
         self.confirmed = [confirmed(None, 11050000, "RRLL2699440", "2026-10-12 10:00:00")]
         self.agenda_on = False
         self.downloads = 0
+        self.expired = False
+        self.logged = True
 
     def get_json(self, path, params=None):
         if path == "/next-api/accounting/orders-by-competition-by-user":
@@ -332,6 +334,55 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(main.job_sales(c, tg, state), 0)
         self.assertEqual(main.job_sales(c, tg, state), 0)
         self.assertEqual(sent, [])
+
+    def test_cookie_header(self):
+        from foco.client import FocoClient, parse_cookie_header
+        self.assertEqual(parse_cookie_header("cookie: a=1; b=x=y=="), {"a": "1", "b": "x=y=="})
+        c = FocoClient(cookie="a=1")
+        self.assertEqual(c.s.cookies.get("a", domain="www.focomarket.com.br"), "1")
+
+    def _client_with_page(self, url):
+        from foco.client import FocoClient
+        c = FocoClient(cookie="a=1")
+        c.s = mock.Mock(cookies=c.s.cookies)
+        c.s.get.return_value = mock.Mock(url=url)
+        return c
+
+    def test_expired_session_never_posts_and_stops_trying(self):
+        from foco.client import LoginError
+        c = self._client_with_page("https://www.focomarket.com.br/site/login")
+        for _ in range(3):
+            with self.assertRaises(LoginError):
+                c.login()
+        self.assertTrue(c.expired)
+        self.assertEqual(c.s.get.call_count, 1)  # só a primeira vai ao site
+        c.s.post.assert_not_called()
+
+    def test_valid_session(self):
+        c = self._client_with_page("https://www.focomarket.com.br/competition/future")
+        c.login()
+        self.assertTrue(c.logged)
+        self.assertFalse(c.expired)
+
+    def test_expired_session_alerts_once_until_it_returns(self):
+        import main
+        from foco.client import LoginError
+        c = mock.Mock(expired=True, logged=False)
+        tg = mock.Mock()
+        state = {"done": {}}
+        with mock.patch.object(main, "job_sales", side_effect=LoginError("x")), \
+                mock.patch.object(main, "job_events", side_effect=LoginError("x")), \
+                mock.patch.object(main, "job_report", side_effect=LoginError("x")), \
+                mock.patch.object(main, "job_weekly", side_effect=LoginError("x")):
+            main.job_auto(c, tg, state, commands=False)
+            main.job_auto(c, tg, state, commands=False)
+            self.assertEqual(tg.send.call_count, 1)
+            self.assertIn("venceu", tg.send.call_args[0][0])
+            # cookie renovado: volta a funcionar e um novo vencimento avisa de novo
+            main.job_auto(mock.Mock(expired=False, logged=True), tg, state, commands=False)
+            self.assertFalse(state["session_alerted"])
+            main.job_auto(c, tg, state, commands=False)
+            self.assertEqual(tg.send.call_count, 2)
 
     def test_conflict(self):
         import main

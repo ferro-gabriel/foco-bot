@@ -659,14 +659,22 @@ def job_auto(client, tg, state, commands=True):
     for k in [k for k in done if k.split("-", 1)[1][:10] < old]:
         del done[k]
 
-    if errors:
+    if client.expired:
+        if not state.get("session_alerted"):  # um aviso só, até a sessão voltar
+            state["session_alerted"] = True
+            tg.send("🔑 <b>A sessão da Foco venceu.</b> Estou sem ler vendas e eventos até você renovar o "
+                    "<code>FOCO_COOKIE</code> (passo a passo no README).")
+    elif errors:
         n = state.get("error_streak", 0) + 1
         state["error_streak"] = n
         if n in (3, 12):  # avisa se persistir, sem spam
             tg.send("⚠️ O bot está com erro nas últimas execuções:\n<code>" + e("\n".join(errors))[:1500] + "</code>")
-        print("ERROS:", ", ".join(error_types), "(detalhes vão pro Telegram)")
     else:
         state["error_streak"] = 0
+    if errors:
+        print("ERROS:", ", ".join(error_types), "(detalhes vão pro Telegram)")
+    if client.logged:
+        state["session_alerted"] = False
 
 
 def main():
