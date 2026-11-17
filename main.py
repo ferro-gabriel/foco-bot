@@ -191,6 +191,29 @@ def enrich(events, state):
     return events
 
 
+def push_sistema(events):
+    """Manda as provas recomendadas para a página Corridas do Aspekto OS (se SISTEMA_KEY existir)."""
+    import json, os, urllib.request
+    key = os.environ.get("SISTEMA_KEY", "").strip()
+    if not key:
+        return
+    pick = sorted([x for x in events if x.get("relevant") or x.get("mine")], key=lambda x: (-x["score"], x.get("date") or ""))[:60]
+    def item(ev):
+        panel = "https://www.focomarket.com.br/competition/future?CompetitionSearch%5Bname%5D=" + quote(ev["title"][:40])
+        sit = {"inscrito": "Inscrito", "espera": "Lista de espera"}.get(ev.get("mine") or "", ev_mod.STATUS_LABEL.get(ev["status"], ev["status"]))
+        reasons = ev.get("reasons") or []
+        return {"nome": ev["title"], "data": (ev.get("date") or "")[:10] or None, "cidade": f"{ev.get('city', '')}/{ev.get('uf', '')}".strip("/"),
+                "km": ev.get("km"), "nota": ev["score"], "fotografos": int(ev["photographers"]) if ev.get("photographers") else None,
+                "situacao": sit, "link": panel, "motivo": ", ".join(reasons[:3]) if isinstance(reasons, list) else str(reasons)[:200]}
+    body = json.dumps({"ops": [{"op": "foco.set", "eventos": [item(x) for x in pick]}]}).encode()
+    req = urllib.request.Request(os.environ.get("SISTEMA_URL", "https://goaspekto.com.br/sistema/agente.php"), data=body, method="POST",
+                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": "foco-bot"})
+    try:
+        urllib.request.urlopen(req, timeout=20).read()
+    except Exception as ex:  # o sistema fora do ar não pode parar a bot
+        print("sistema indisponível:", ex)
+
+
 def job_events(client, tg, state, morning=False):
     events = enrich(ev_mod.fetch_all(client), state)
     try:
@@ -200,6 +223,7 @@ def job_events(client, tg, state, morning=False):
         print("agenda indisponível:", ex)
         agenda = {}
     mark_agenda(events, agenda)
+    push_sistema(events)
     seen = state.setdefault("events", {})
     first_run = not seen
     relevant = [x for x in events if x["relevant"] and not x["mine"]]

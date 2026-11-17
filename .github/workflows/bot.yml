@@ -40,6 +40,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STATE_KEY: ${{ secrets.STATE_KEY }}
+          SISTEMA_KEY: ${{ secrets.SISTEMA_KEY }}
         run: python main.py ${{ inputs.cmd || 'listen' }}
 
       - name: Salvar memória do bot (criptografada)
