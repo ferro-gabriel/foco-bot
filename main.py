@@ -215,7 +215,7 @@ def push_sistema(events):
 
 
 def job_events(client, tg, state, morning=False):
-    events = enrich(ev_mod.fetch_all(client), state)
+    events = enrich(ev_mod.fetch_all(client, cache=state.setdefault("ev_details", {})), state)
     try:
         agenda = get_agenda(client, state)
         check_agenda_changes(agenda, tg, state)
@@ -577,7 +577,7 @@ Também entendo palavras soltas: "relatório", "agenda", "eventos", "vendas"."""
 
 def job_events_now(client, tg, state):
     """/eventos: lista os melhores abertos agora, sem mexer nos alertas."""
-    events = enrich(ev_mod.fetch_all(client), state)
+    events = enrich(ev_mod.fetch_all(client, cache=state.setdefault("ev_details", {})), state)
     try:
         agenda = get_agenda(client, state)
     except Exception:
@@ -719,8 +719,12 @@ def main():
                 r = next(iter(found.values()), None)
                 data = client.download(r["view"]) if r and r.get("view") else None
                 print(f"✅ Foto vendida sem marca d'água: {len(data) // 1024} KB" if data else "⚠️ Não baixei a foto sem marca")
-            evs = ev_mod.parse_future(client.get("/competition/future"))
-            print(f"✅ Página de eventos OK: {len(evs)} eventos na primeira página")
+            evs = ev_mod.fetch_all(client, days_ahead=30)
+            print(f"✅ Eventos OK: {len(evs)} em SC/PR/RS nos próximos 30 dias, "
+                  f"{sum(1 for x in evs if x.get('photographers') or x.get('waitlist'))} com nº de fotógrafos")
+            ag = ev_mod.fetch_agenda(client)
+            print(f"✅ Agenda OK: {sum(1 for a in ag.values() if a['mine'] == 'inscrito')} confirmados, "
+                  f"{sum(1 for a in ag.values() if a['mine'] == 'espera')} na lista de espera")
             return
         {"auto": job_auto, "listen": job_listen, "events": lambda c, t, s: job_events(c, t, s, morning=True),
          "sales": job_sales, "report": job_report, "weekly": job_weekly}[cmd](client, tg, state)

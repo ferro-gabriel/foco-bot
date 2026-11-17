@@ -1,7 +1,9 @@
 """Testes offline: python -m unittest discover tests"""
 import os
 import sys
+import json
 import unittest
+from datetime import date, timedelta
 from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,9 +46,16 @@ def confirmed(item, order, code, paid, res="Premium 4500 Pixels", comm=7.4):
             "orderDate": paid, "paymentDate": paid, "paymentTypeName": "Pagarme Pix", "imageTypeName": res}
 
 
+def future_events():
+    """Os 3 eventos de exemplo, lidos como o bot lê a API nova."""
+    import json
+    j = json.loads(fx("future.json"))
+    return [events.parse_item(it, j["details"].get(str(it["id"]))) for it in j["items"]]
+
+
 class ParseTests(unittest.TestCase):
     def test_future(self):
-        evs = {e["id"]: e for e in events.parse_future(fx("future.html"))}
+        evs = {e["id"]: e for e in future_events()}
         self.assertEqual(len(evs), 3)
         a = evs["300001"]
         self.assertEqual((a["city"], a["uf"], a["sport"]), ("Forquilhinha", "SC", "Corrida de Rua"))
@@ -64,7 +73,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual((c["status"], c["uf"], c["partnership"]), ("espera", "PR", "sem"))
 
     def test_relevance(self):
-        evs = {e["id"]: e for e in events.parse_future(fx("future.html"))}
+        evs = {e["id"]: e for e in future_events()}
         evs["300001"]["km"] = 220
         evs["300003"]["km"] = 250
         self.assertTrue(events.is_relevant(evs["300001"]))
@@ -89,13 +98,44 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(items[0]["paid_at"][:16], "2026-10-16T11:41")  # UTC → Brasília
         self.assertEqual(items[0]["payment"], "Pix")
 
-    def test_agenda_card_without_modal(self):
-        evs = events.parse_future(AGENDA_DAY_HTML)
-        self.assertEqual(len(evs), 1)
-        self.assertEqual((evs[0]["id"], evs[0]["city"], evs[0]["date"]), ("193965", "Blumenau", "2026-11-08"))
+    def test_status_rules(self):
+        """Mesma regra do botão do card no site novo."""
+        base = {"id": 1, "name": "X", "date": "2030-01-01", "state": {"abbreviation": "SC"}}
+        st = lambda **kw: events.parse_item(dict(base, **kw))["status"]
+        self.assertEqual(st(), "aberto")
+        self.assertEqual(st(userSignedToCompetition=True, waitingListEnabled=True), "inscrito")
+        self.assertEqual(st(status=11), "aprovacao")
+        self.assertEqual(st(registerDate="2020-01-01 10:00:00"), "encerrado")
+        self.assertEqual(st(isPool=True, eventSlotsAvailability={"isEligible": True, "availableSlots": 0}), "esgotado")
+        self.assertEqual(st(isPool=True, eventSlotsAvailability={"isEligible": False}), "nivel")
+        self.assertEqual(st(waitingListEnabled=True, waitingListStatus="rejected"), "espera_encerrada")
+        self.assertEqual(st(waitingListEnabled=True, waitingListDeadline="2099-01-01 10:00:00"), "espera")
+
+    def test_agenda(self):
+        c = FakeClient()
+        c.agenda_on = True
+        ag = events.fetch_agenda(c)
+        self.assertEqual({k: v["mine"] for k, v in ag.items()}, {"300001": "inscrito", "300003": "espera"})
+        # a agenda só aceita ~2 meses por consulta: nenhum pedido maior que isso
+        self.assertTrue(all((date.fromisoformat(t) - date.fromisoformat(f)).days < events.SCHEDULE_DAYS
+                            for f, t in c.schedule_ranges))
+        self.assertGreaterEqual(c.schedule_ranges[-1][1], (date.today() + timedelta(days=364)).isoformat())
+
+    def test_fetch_all_paginates_and_caches_details(self):
+        c = FakeClient()
+        cache = {}
+        evs = events.fetch_all(c, cache=cache)
+        self.assertEqual(len(evs), 3)  # o mesmo evento em vários estados não duplica
+        n = c.detail_calls
+        self.assertEqual(n, 3)
+        events.fetch_all(c, cache=cache)
+        self.assertEqual(c.detail_calls, n)  # detalhes guardados: não pede de novo
+        self.assertNotIn("registrationTerms", cache["300001"]["d"])  # memória enxuta
 
     def test_ranking(self):
         self.assertEqual(events.parse_ranking(RANK_HTML), (27, 63))
+        rsc = r'self.__next_f.push([1,"{\"photographers\":{\"count\":16},\"ranking\":{\"rank\":9,\"total\":16},\"points\":1000'
+        self.assertEqual(events.parse_ranking(rsc), (9, 16))
         self.assertIsNone(events.parse_ranking("<div>Número de fotógrafos 63</div>"))
 
     def test_sold(self):
@@ -129,19 +169,6 @@ RANK_HTML = """<div class="info-section mb-3 d-flex flex-column justify-content-
 <span class="event-info-value font-medium text-sm">
     27º de 63 fotógrafos                </span></div>"""
 
-AGENDA_DAY_HTML = """<div class="col-md-6 col-sm-12 card-event-widget"><div class="event-card-fc ">
-<div class="event-card-header-fc"><h3 class="event-title-fc">CIRCUITO ANGELONI 2026 - BLUMENAU</h3>
-<a class="event-dropdown-link-fc" href="/competition/update-spot?id=193965">Editar</a>
-<a class="link-event" id="link-event-193965" href="https://www.focoradical.com.br/evento/x"></a></div>
-<div class="event-card-body"><div class="event-information-container"><div class="left-card-column">
-<div class="icon-text-card"><span class="event-text-fc event-city-fc">Corrida de Rua</span></div>
-<div class="icon-text-card icon-text-card-location-fc"><span class="event-text-fc"><span class="event-city-fc">Blumenau</span><span class="event-state-fc">/ SC</span></span></div>
-</div><div>08/11/26</div></div>
-<button class="event-button-fc" data-target="#view-event-modal-193965">Ver Evento</button>
-<a href="/competition/information/193965#uploads">Uploads</a>
-<button data-competition_id="193965">Informações</button></div></div></div>"""
-
-
 class FakeClient:
     """Simula o site: vendas crescem entre as chamadas."""
     def __init__(self):
@@ -151,6 +178,8 @@ class FakeClient:
         self.downloads = 0
         self.expired = False
         self.logged = True
+        self.detail_calls = 0
+        self.schedule_ranges = []
 
     def get_json(self, path, params=None):
         if path == "/next-api/accounting/orders-by-competition-by-user":
@@ -160,6 +189,22 @@ class FakeClient:
             self.pages_read = max(getattr(self, "pages_read", 0), page)
             return {"items": self.confirmed[(page - 1) * per:page * per],
                     "_meta": {"pageCount": max(1, -(-len(self.confirmed) // per))}}
+        if path == "/next-api/competition/future-list":
+            j = json.loads(fx("future.json"))
+            page = params.get("page", 1)  # 2 páginas: a 2ª repete um evento (não pode duplicar)
+            items = j["items"][:2] if page == 1 else j["items"][1:]
+            return {"items": items, "_meta": {"pageCount": 2}}
+        if path == "/next-api/competition/future-detail":
+            self.detail_calls += 1
+            return json.loads(fx("future.json"))["details"][str(params["id"])]
+        if path == "/next-api/photographer-events/my-waiting-list":
+            items = json.loads(fx("future.json"))["items"] if self.agenda_on else []
+            items = [dict(items[2], waitingListStatus="pending"), dict(items[1], waitingListStatus="rejected")] if items else []
+            return {"items": items, "_meta": {"pageCount": 1}}
+        if path == "/next-api/photographer-events/schedule":
+            self.schedule_ranges.append((params["from"], params["to"]))
+            items = [dict(json.loads(fx("future.json"))["items"][0], userSignedToCompetition=True)] if self.agenda_on else []
+            return {"items": items if params["from"] == date.today().isoformat() else [], "bounds": {}, "truncated": False}
         if path == "/next-api/report/sold-images":
             items = SOLD_ITEMS if params["type"] == "photo" else []
             return {"type": params["type"], "items": items, "pagination": {"pageCount": 1}}
@@ -173,23 +218,6 @@ class FakeClient:
         pass
 
     def get(self, path, params=None):
-        if path == "/competition/future":
-            return fx("future.html")
-        if path == "/competition/my-waiting-list":
-            if not self.agenda_on:
-                return "<html></html>"
-            return fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')[0] + \
-                '<div class="col-md-4 col-sm-12 card-event-widget">' + fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')[3]
-        if path == "/competition/schedule":
-            if not self.agenda_on:
-                return "<html></html>"
-            return '<div class="time-frame" data-time-frame-index="2030-10-17" data-total-competitions="1"></div>' \
-                   '<div class="time-frame" data-time-frame-index="2026-10-18" data-total-competitions="0"></div>' \
-                   '<div class="time-frame" data-time-frame-index="2020-01-01" data-total-competitions="3"></div>'
-        if path == "/competition/load-competitions-by-date":
-            assert params["date"] == "2030-10-17", params
-            parts = fx("future.html").split('<div class="col-md-4 col-sm-12 card-event-widget">')
-            return parts[0] + '<div class="col-md-4 col-sm-12 card-event-widget">' + parts[1]
         if path.startswith("/competition/information/"):
             return RANK_HTML
         if path == "/accounting/get-convertion-by-competition":
@@ -215,7 +243,7 @@ class FlowTests(unittest.TestCase):
             ("album", ["sem marca" if i.get("data") else "miniatura" for i in items], cap))
         c = FakeClient()
 
-        with mock.patch.object(events, "fetch_all", lambda client: events.parse_future(fx("future.html"))):
+        with mock.patch.object(events, "fetch_all", lambda client, **kw: future_events()):
             main.job_events(c, tg, state)                      # 1ª vez: resumo
             self.assertIn("Bot ligado", sent[-1])
             state["events"]["300003"]["status"] = "esgotado"   # simula mudança
@@ -280,7 +308,7 @@ class FlowTests(unittest.TestCase):
         main.handle_command("relatório", c, tg, state)
         self.assertEqual(state["report_snapshot"], snap)  # sob demanda não mexe no relatório das 9h
         self.assertTrue(any("Relatório agora" in x for x in sent[n:] if isinstance(x, str)))
-        with mock.patch.object(events, "fetch_all", lambda client: events.parse_future(fx("future.html"))):
+        with mock.patch.object(events, "fetch_all", lambda client, **kw: future_events()):
             main.handle_command("/eventos", c, tg, state)
         self.assertNotIn("CORRIDA DO CORAÇÃO", sent[-1])  # já inscrito: não recomenda de novo
         main.handle_command("qualquer coisa", c, tg, state)

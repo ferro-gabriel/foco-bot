@@ -1,0 +1,35 @@
+{
+ "items": [
+  {"id": 300001, "name": "CORRIDA DO CORAÇÃO - EDIÇÃO AEROPORTO", "path": "20301017-corrida-do-coracao",
+   "date": "2030-10-17", "place": "Forquilhinha", "state": {"id": 24, "abbreviation": "SC"},
+   "sport": {"name": "Corrida de Rua", "isSpot": false, "isSocial": false}, "status": 0,
+   "registerDate": "2099-10-13 12:00:00", "waitingListEnabled": false, "waitingListDeadline": null,
+   "isPool": true, "userSignedToCompetition": false, "waitingListStatus": null,
+   "partnershipBadge": {"label": "Parceria Foco", "variant": "official"},
+   "eventSlotsAvailability": {"isEligible": true, "availableSlots": 4, "message": null}},
+  {"id": 275615, "name": "MARCÍLIO DIAS X FIGUEIRENSE", "path": "20301016-marcilio-dias-x-figueirense",
+   "date": "2030-10-16", "place": "Itajaí", "state": {"id": 24, "abbreviation": "SC"},
+   "sport": {"name": "Torcidas de Futebol", "isSpot": false, "isSocial": false}, "status": 0,
+   "registerDate": null, "waitingListEnabled": true, "waitingListDeadline": "2020-10-01 18:00:00",
+   "isPool": true, "userSignedToCompetition": false, "waitingListStatus": null,
+   "partnershipBadge": null, "eventSlotsAvailability": null},
+  {"id": 300003, "name": "MEIA MARATONA DE CURITIBA", "path": "20301025-meia-maratona-de-curitiba",
+   "date": "2030-10-25", "place": "Curitiba", "state": {"id": 16, "abbreviation": "PR"},
+   "sport": {"name": "Corrida de Rua", "isSpot": false, "isSocial": false}, "status": 0,
+   "registerDate": null, "waitingListEnabled": true, "waitingListDeadline": "2099-10-20 12:00:00",
+   "isPool": true, "userSignedToCompetition": false, "waitingListStatus": null,
+   "partnershipBadge": {"label": "Sem parceria", "variant": "no_partnership"},
+   "eventSlotsAvailability": {"isEligible": true, "availableSlots": null}}
+ ],
+ "_meta": {"totalCount": 3, "currentPage": 1, "perPage": 50, "pageCount": 1},
+ "details": {
+  "300001": {"commissions": {"officialRate": "90", "unofficialRate": null}, "points": 1000, "credits": null,
+             "photographersCount": 12, "photographersCountIsWaitingApproval": false,
+             "priceProfile": {"isVideo": true, "videoPrice": 22.9, "imageTypes": [
+               {"name": "Premium 4500 Pixels", "price": 19.9}, {"name": "Alta 3450 Pixels", "price": 16.9}]},
+             "identificationType": "Somente por Detecção Facial", "organizerContact": null,
+             "formatedLaunchDate": "17/10/2030 12:00", "registrationTerms": {"briefing": "<p>longo</p>"}},
+  "275615": {"photographersCount": 18, "photographersCountIsWaitingApproval": true},
+  "300003": {"photographersCount": 25, "photographersCountIsWaitingApproval": true}
+ }
+}

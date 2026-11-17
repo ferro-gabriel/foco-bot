@@ -8,16 +8,6 @@ from . import config
 
 STATES = {"SC": 24, "PR": 16, "RS": 21}
 
-# Status a partir dos textos que aparecem no card (ordem importa)
-STATUS_RULES = [
-    ("nivel", "Nível insuficiente"),
-    ("espera_encerrada", "Lista de espera encerrada"),
-    ("encerrado", "Cadastro encerrado"),
-    ("esgotado", "Vagas Esgotadas"),
-    ("espera", "Lista de espera encerra em"),
-    ("espera", "Entrar na Lista de Espera"),
-    ("espera", "Lista de Espera"),
-]
 STATUS_LABEL = {
     "aberto": "🟢 Cadastro aberto",
     "espera": "🟡 Lista de espera aberta",
@@ -26,190 +16,191 @@ STATUS_LABEL = {
     "espera_encerrada": "⚫ Lista de espera encerrada",
     "nivel": "⚪ Nível insuficiente",
     "inscrito": "✅ Você já está inscrito",
+    "aprovacao": "⚪ Aguardando aprovação do organizador",
 }
 OPEN_STATUSES = {"aberto", "espera"}
+PENDING_ORGANIZER = 11  # status do evento: aguardando aprovação do organizador
+PUBLIC_PAGE = "https://www.focoradical.com.br/evento/"
+DETAIL_TTL_H = 6        # detalhes (fotógrafos, preços) valem por algumas horas: não pede tudo toda hora
+DETAIL_KEYS = ("commissions", "points", "credits", "photographersCount", "photographersCountIsWaitingApproval",
+               "waitingListTotalPending", "priceProfile", "identificationType", "organizerContact", "formatedLaunchDate")
+SCHEDULE_DAYS = 60      # a "Minha Agenda" só aceita ~2 meses por consulta
 
 
-def _num(s):
-    """Primeiro número do texto: 'R$ 1.234,50' → 1234.5 · '90% Fotógrafo' → 90"""
-    if s is None:
-        return None
-    m = re.search(r"\d[\d.]*(?:,\d+)?", s)
-    if not m:
-        return None
-    return float(m.group(0).replace(".", "").replace(",", "."))
+# ---------------------------------------------------------------- leitura (API do painel novo, nov/2026)
+# O painel de eventos virou telas novas em 17/11/2026. Lista: /next-api/competition/future-list,
+# detalhes de cada evento (fotógrafos, preços, comissão): /next-api/competition/future-detail?id=.
+
+def _past(ts):
+    """'2026-11-20 18:00:00' já passou? (horário de Brasília, comparado como texto)"""
+    if not ts:
+        return False
+    from datetime import timezone
+    now = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    return str(ts).replace("T", " ")[:19] < now
 
 
-def _grab(text, label, cast=_num):
-    m = re.search(re.escape(label) + r"\s*\|\s*([^|]+)", text)
-    return cast(m.group(1)) if m else None
+def status_of(it):
+    """A mesma regra do botão do card no site."""
+    if it.get("userSignedToCompetition"):
+        return "inscrito"
+    if it.get("status") == PENDING_ORGANIZER:
+        return "aprovacao"
+    slots = it.get("eventSlotsAvailability") or {}
+    if it.get("waitingListEnabled"):
+        if it.get("waitingListStatus") == "rejected" or _past(it.get("waitingListDeadline")):
+            return "espera_encerrada"
+        if slots and not slots.get("isEligible", True):
+            return "nivel"
+        return "espera"
+    if it.get("registerDate") and _past(it["registerDate"]):
+        return "encerrado"
+    if it.get("isPool") and slots:
+        if not slots.get("isEligible", True):
+            return "nivel"
+        if slots.get("availableSlots") == 0:
+            return "esgotado"
+    return "aberto"
 
 
-def _event_id(w, modal):
-    """Número do evento. Na "Minha Agenda" o card vem sem o modal, então há outras fontes."""
-    if modal:
-        return modal["id"].rsplit("-", 1)[-1]
-    for attr in ("data-competition-id", "data-competition_id"):
-        el = w.select_one(f"[{attr}]")
-        if el and el[attr].isdigit():
-            return el[attr]
-    for el, attr, rx in ((w.select_one('[data-target^="#view-event-modal-"]'), "data-target", r"(\d+)$"),
-                         (w.select_one('a[id^="link-event-"]'), "id", r"(\d+)$"),
-                         (w.select_one('a[href*="/competition/information/"]'), "href", r"/information/(\d+)")):
-        if el:
-            m = re.search(rx, el.get(attr, ""))
-            if m:
-                return m.group(1)
+def _price(detail, word):
+    for t in ((detail.get("priceProfile") or {}).get("imageTypes") or []):
+        if word in (t.get("name") or "").lower():
+            return t.get("price")
     return None
 
 
-def parse_future(html):
-    soup = BeautifulSoup(html, "html.parser")
-    events = []
-    for w in soup.select(".card-event-widget"):
-        card = w.select_one(".event-card-fc")
-        if not card:
+def _float(v):
+    try:
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_item(it, detail=None):
+    """Um evento da API (lista + detalhe opcional) no formato que o resto do bot usa."""
+    d = detail or {}
+    slots = it.get("eventSlotsAvailability") or {}
+    badge = (it.get("partnershipBadge") or {}).get("variant")
+    wl_open = it.get("waitingListEnabled")
+    deadline = it.get("waitingListDeadline") if wl_open else it.get("registerDate")
+    count = d.get("photographersCount")
+    waiting = bool(d.get("photographersCountIsWaitingApproval"))
+    org = d.get("organizerContact")
+    if isinstance(org, dict):
+        org = org.get("name") or org.get("company") or None
+    profile = d.get("priceProfile") or {}
+    return {
+        "id": str(it["id"]),
+        "title": (it.get("name") or "").strip(),
+        "sport": ((it.get("sport") or {}).get("name") or "").strip(),
+        "city": (it.get("place") or "").strip(),
+        "uf": (it.get("state") or {}).get("abbreviation") or "",
+        "date": (it.get("date") or "")[:10] or None,
+        "status": status_of(it),
+        "deadline": str(deadline)[:19] if deadline else None,
+        "deadline_label": ("Lista de espera encerra em" if wl_open else "Limite de cadastro") if deadline else None,
+        "vagas": slots.get("availableSlots"),
+        "partnership": {"official": "oficial", "no_partnership": "sem", "photographer": "fotografo"}.get(badge),
+        "link": PUBLIC_PAGE + it["path"] if it.get("path") else None,
+        "commission": _float((d.get("commissions") or {}).get("officialRate")),
+        "points": _float(d.get("points")),
+        "photographers": None if waiting else _float(count),
+        "waitlist": _float(count) if waiting else _float(d.get("waitingListTotalPending")),
+        "price_premium": _price(d, "premium"),
+        "price_high": _price(d, "alta"),
+        "price_video": profile.get("videoPrice") if profile.get("isVideo") else None,
+        "price_medium": _price(d, "média") or _price(d, "media"),
+        "price_low": _price(d, "baixa"),
+        "credits": _float(d.get("credits")),
+        "identification": d.get("identificationType"),
+        "organizer": org,
+        "launch": d.get("formatedLaunchDate"),
+    }
+
+
+def _pages(client, path, params=None, max_pages=40):
+    """Todas as páginas de uma lista da API ({items, _meta.pageCount})."""
+    out, page = [], 1
+    while page <= max_pages:
+        j = client.get_json(path, dict(params or {}, **({"page": page} if page > 1 else {})))
+        out += j.get("items") or []
+        if page >= ((j.get("_meta") or {}).get("pageCount") or 1):
+            break
+        page += 1
+    return out
+
+
+def fetch_details(client, ids, cache=None):
+    """Detalhe de cada evento, guardado em `cache` (memória do bot) por DETAIL_TTL_H horas."""
+    cache = cache if cache is not None else {}
+    now = datetime.now().timestamp()
+    out = {}
+    for i in ids:
+        c = cache.get(i)
+        if c and now - c.get("t", 0) < DETAIL_TTL_H * 3600:
+            out[i] = c["d"]
             continue
-        modal = w.select_one('.modal[id^="view-event-modal-"]')
-        ev_id = _event_id(w, modal)
-        if not ev_id:
-            continue
-
-        title = card.select_one(".event-title-fc").get_text(" ", strip=True)
-        texts = card.select(".icon-text-card .event-text-fc")
-        sport = texts[0].get_text(" ", strip=True) if texts else ""
-        city_el = card.select_one(".icon-text-card-location-fc .event-city-fc")
-        uf_el = card.select_one(".event-state-fc")
-        city = city_el.get_text(strip=True) if city_el else ""
-        uf = uf_el.get_text(strip=True).replace("/", "").strip() if uf_el else ""
-
-        mt = modal.get_text("|", strip=True) if modal else ""
-        # os modais ficam dentro do card: tira eles antes de ler status/data
-        card = BeautifulSoup(str(card), "html.parser")
-        for m in card.select(".modal"):
-            m.decompose()
-        card_text = card.get_text(" | ", strip=True)
-        dm = re.search(r"(\d{2})/(\d{2})/(\d{2})\b", card_text)
-        ev_date = date(2000 + int(dm.group(3)), int(dm.group(2)), int(dm.group(1))).isoformat() if dm else None
-
-        status = "aberto"
-        for key, needle in STATUS_RULES:
-            if needle in card_text:
-                status = key
-                break
-
-        timer = card.select_one("p.timer[data-countdown]")
-        warn = card.select_one(".register-date-warning")
-        deadline_label = warn.get_text(" ", strip=True).split(":")[0] if warn else None
-        vagas = re.search(r"Vagas restantes:\s*\|?\s*(\d+)", card_text)
-        link = card.select_one("a.link-event")
-        partnership = None
-        if card.select_one(".event-badge-fc--official"):
-            partnership = "oficial"
-        elif card.select_one(".event-badge-fc--no_partnership"):
-            partnership = "sem"
-
-        if re.search(r"Descadastrar|Cancelar cadastro|Você está cadastrado|Cadastrado", mt):
-            status = "inscrito"
-        ev = {
-            "id": ev_id,
-            "title": title,
-            "sport": sport,
-            "city": city,
-            "uf": uf,
-            "date": ev_date,
-            "status": status,
-            "deadline": timer["data-countdown"] if timer else None,
-            "deadline_label": deadline_label,
-            "vagas": int(vagas.group(1)) if vagas else None,
-            "partnership": partnership,
-            "link": link["href"] if link and link.get("href") else None,
-            "commission": _grab(mt, "Oficial:"),
-            "points": _grab(mt, "Pontos:"),
-            "photographers": _grab(mt, "Fotógrafos:"),
-            "waitlist": _grab(mt, "Fotógrafos na lista de espera:"),
-            "price_premium": _grab(mt, "Premium:"),
-            "price_high": _grab(mt, "Alta:"),
-            "price_video": _grab(mt, "Vídeo:"),
-            "price_medium": _grab(mt, "Média:"),
-            "price_low": _grab(mt, "Baixa:"),
-            "credits": _grab(mt, "Créditos:"),
-            "identification": _grab(mt, "Identificação dos Atletas:", lambda v: v.strip()),
-            "organizer": _grab(mt, "Organizador:", lambda v: v.strip()),
-            "launch": _grab(mt, "Lançamento:", lambda v: v.strip()),
-        }
-        events.append(ev)
-    return events
+        try:
+            full = client.get_json("/next-api/competition/future-detail", {"id": i})
+            d = {k: full.get(k) for k in DETAIL_KEYS}  # só o que o bot usa (a memória fica pequena)
+            cache[i] = {"t": now, "d": d}
+            out[i] = d
+        except Exception as ex:  # um detalhe faltando não derruba a lista
+            print("detalhe do evento indisponível:", i, ex)
+            out[i] = (c or {}).get("d")
+    for k in [k for k in cache if k not in ids]:  # esquece eventos que saíram da lista
+        del cache[k]
+    return out
 
 
-def has_next_page(html, page):
-    soup = BeautifulSoup(html, "html.parser")
-    for a in soup.select(".pagination a"):
-        if a.get_text(strip=True) == str(page + 1):
-            return True
-    return False
-
-
-def fetch_all(client, days_ahead=None):
+def fetch_all(client, days_ahead=None, cache=None):
     days_ahead = days_ahead or config.DAYS_AHEAD
     today = date.today()
-    out = {}
+    items = {}
     for uf, sid in STATES.items():
-        page = 1
-        while page <= 40:
-            html = client.get(
-                "/competition/future",
-                {
-                    "CompetitionSearch[state_id]": sid,
-                    "CompetitionSearch[future_list_date_from]": today.strftime("%d/%m/%Y"),
-                    "CompetitionSearch[future_list_date_to]": (today + timedelta(days=days_ahead)).strftime("%d/%m/%Y"),
-                    "page": page,
-                },
-            )
-            for ev in parse_future(html):
-                ev["uf"] = ev["uf"] or uf
-                out[ev["id"]] = ev
-            if not has_next_page(html, page):
-                break
-            page += 1
-    if not out:
+        for it in _pages(client, "/next-api/competition/future-list", {
+            "CompetitionSearch[state_id]": sid,
+            "CompetitionSearch[future_list_date_from]": today.strftime("%d/%m/%Y"),
+            "CompetitionSearch[future_list_date_to]": (today + timedelta(days=days_ahead)).strftime("%d/%m/%Y"),
+        }):
+            items[str(it["id"])] = it
+    if not items:
         raise RuntimeError("A lista de eventos veio vazia (o painel mudou?)")
-    return list(out.values())
+    details = fetch_details(client, list(items), cache)
+    return [parse_item(it, details.get(i)) for i, it in items.items()]
 
 
 def fetch_waitlist(client, max_pages=6):
-    """Pedidos pendentes: página "Na lista de espera" (ainda não estão na sua agenda)."""
+    """Pedidos pendentes: tela "Na lista de espera" (ainda não estão na sua agenda)."""
     today = date.today().isoformat()
     out = {}
-    for page in range(1, max_pages + 1):
-        html = client.get("/competition/my-waiting-list", {"page": page})
-        evs = parse_future(html)
-        for ev in evs:
+    for it in _pages(client, "/next-api/photographer-events/my-waiting-list", max_pages=max_pages):
+        if it.get("waitingListStatus") != "pending" or it.get("userSignedToCompetition"):
+            continue  # recusado, ou já aprovado (aparece na agenda)
+        ev = parse_item(it)
+        if (ev["date"] or "9999") >= today:
             ev["mine"] = "espera"
             out[ev["id"]] = ev
-        # a lista vem da data mais distante para a mais antiga: para quando chegar no passado
-        if not evs or all((e["date"] or "9999") < today for e in evs) or not has_next_page(html, page):
-            break
-    return {k: v for k, v in out.items() if (v["date"] or "9999") >= today}
+    return out
 
 
-def fetch_schedule(client):
-    """Eventos confirmados: aba "Minha Agenda". A página traz quantos eventos há em cada dia;
-    os cards de cada dia vêm de /competition/load-competitions-by-date."""
-    today = date.today().isoformat()
-    html = client.get("/competition/schedule")
-    days = [d for d, n in re.findall(r'data-time-frame-index="([\d-]+)"\s+data-total-competitions="(\d+)"', html)
-            if int(n) > 0 and d >= today]
+def fetch_schedule(client, days_ahead=None):
+    """Eventos confirmados: "Minha Agenda", pedida em blocos de ~2 meses."""
+    days_ahead = days_ahead or config.DAYS_AHEAD
+    start, end = date.today(), date.today() + timedelta(days=days_ahead)
     out = {}
-    for d in days:
-        part = client.get("/competition/load-competitions-by-date", {
-            "date": d, "CompetitionSearch[name]": "", "CompetitionSearch[group_by]": "day",
-            "day-group-date-picker": d,
-        })
-        for ev in parse_future(part):
+    while start <= end:
+        stop = min(start + timedelta(days=SCHEDULE_DAYS - 1), end)
+        j = client.get_json("/next-api/photographer-events/schedule",
+                            {"from": start.isoformat(), "to": stop.isoformat()})
+        if j.get("errors"):
+            raise RuntimeError(f"Minha Agenda recusou a consulta: {j['errors']}")
+        for it in j.get("items") or []:
+            ev = parse_item(it)
             ev["mine"] = "inscrito"
-            ev["date"] = ev["date"] or d
             out[ev["id"]] = ev
+        start = stop + timedelta(days=1)
     return out
 
 
@@ -220,11 +211,16 @@ def fetch_agenda(client):
     return agenda
 
 
+RANK_JSON_RX = re.compile(r'\\?"ranking\\?"\s*:\s*\{\s*\\?"rank\\?"\s*:\s*(\d+)\s*,\s*\\?"total\\?"\s*:\s*(\d+)')
 RANK_RX = re.compile(r"classifica[çc][ãa]o no evento.*?(\d+)\s*[º°ª]?\s*de\s*(\d+)\s*fot", re.I | re.S)
 
 
 def parse_ranking(html):
-    """'Sua classificação no evento (com base no seu ranking): 27° de 63 fotógrafos' → (27, 63)"""
+    """Painel do Evento: '"ranking":{"rank":9,"total":16}' nos dados da página (site novo)
+    ou 'Sua classificação no evento ...: 27° de 63 fotógrafos' no texto (site antigo) → (rank, total)."""
+    m = RANK_JSON_RX.search(html)
+    if m:
+        return int(m.group(1)), int(m.group(2))
     txt = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     m = RANK_RX.search(txt)
     return (int(m.group(1)), int(m.group(2))) if m else None
